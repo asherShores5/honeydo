@@ -234,6 +234,8 @@ export function response(ctx) {
 }
 
 export const GITHUB_REPO = "asherShores5/honeydo";
+/** Immutable owner/repo IDs; GitHub's OIDC `sub` now embeds them (owner@id/repo@id). */
+const GITHUB_REPO_WITH_IDS = "asherShores5@71547146/honeydo@1427388015";
 export const DEPLOY_BRANCH = "prod";
 
 /**
@@ -253,7 +255,9 @@ export class CiStack extends Stack {
       assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": `repo:${GITHUB_REPO}:ref:refs/heads/${DEPLOY_BRANCH}`,
+          "token.actions.githubusercontent.com:sub": [GITHUB_REPO_WITH_IDS, GITHUB_REPO].map(
+            (r) => `repo:${r}:ref:refs/heads/${DEPLOY_BRANCH}`,
+          ),
         },
       }),
     });
