@@ -1,0 +1,139 @@
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+type Item {
+  id: ID!
+  kind: String!
+  title: String!
+  notes: String
+  tags: [String!]!
+  assigneeId: String
+  visibility: String!
+  severity: String
+  recurrence: AWSJSON
+  dueAt: Float
+  warnWindow: Float
+  lastDoneAt: Float
+  lastDoneBy: String
+  snoozedUntil: Float
+  archived: Boolean!
+  createdBy: String!
+  createdAt: Float!
+  updatedAt: Float!
+  version: Int!
+}
+
+input ItemInput {
+  id: ID!
+  kind: String!
+  title: String!
+  notes: String
+  tags: [String!]!
+  assigneeId: String
+  visibility: String!
+  severity: String
+  recurrence: AWSJSON
+  dueAt: Float
+  warnWindow: Float
+  snoozedUntil: Float
+  archived: Boolean!
+}
+
+type Completion {
+  itemId: ID!
+  at: Float!
+  by: String!
+  note: String
+}
+
+type Tag {
+  id: ID!
+  name: String!
+  group: String!
+  color: String
+  order: Int
+  deleted: Boolean
+  updatedAt: Float!
+}
+
+input TagInput {
+  id: ID!
+  name: String!
+  group: String!
+  color: String
+  order: Int
+}
+
+type Profile {
+  userId: ID!
+  username: String!
+  displayName: String
+  color: String
+  theme: String
+  density: String
+  defaultView: AWSJSON
+  savedViews: AWSJSON
+  alertPrefs: AWSJSON
+  setupComplete: Boolean!
+  updatedAt: Float!
+}
+
+input ProfileInput {
+  displayName: String
+  color: String
+  theme: String
+  density: String
+  defaultView: AWSJSON
+  savedViews: AWSJSON
+  alertPrefs: AWSJSON
+  setupComplete: Boolean
+}
+
+type FeedEvent {
+  id: ID!
+  at: Float!
+  by: String!
+  type: String!
+  itemId: String
+  title: String
+  detail: String
+}
+
+type Snapshot {
+  items: [Item!]!
+  tags: [Tag!]!
+  profiles: [Profile!]!
+  feed: [FeedEvent!]!
+  serverTime: Float!
+}
+
+"Item mutations fan out to subscribers through this envelope."
+type ItemChange {
+  item: Item!
+  visibility: String!
+}
+
+type Query {
+  me: Profile!
+  snapshot: Snapshot!
+  completions(itemId: ID!, limit: Int): [Completion!]!
+}
+
+type Mutation {
+  "Create or update. expectedVersion guards concurrent edits; omit to force (last-write-wins)."
+  putItem(input: ItemInput!, expectedVersion: Int): ItemChange!
+  completeItem(itemId: ID!, at: Float, note: String): ItemChange!
+  undoCompletion(itemId: ID!, at: Float!): ItemChange!
+  putTag(input: TagInput!): Tag!
+  deleteTag(id: ID!): Tag!
+  putProfile(input: ProfileInput!): Profile!
+}
+
+type Subscription {
+  onItemChange: ItemChange @aws_subscribe(mutations: ["putItem", "completeItem", "undoCompletion"])
+  onTagChange: Tag @aws_subscribe(mutations: ["putTag", "deleteTag"])
+  onProfileChange: Profile @aws_subscribe(mutations: ["putProfile"])
+}

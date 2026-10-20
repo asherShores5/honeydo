@@ -1,0 +1,276 @@
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
+import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
+import type { Item } from "@aubi/shared";
+import { UserError, canSee, validateItemInput, validateProfileInput, type ItemInput } from "./rules";
+
+const TABLE = process.env.TABLE_NAME!;
+const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
+const PK = "HH#aubi";
+const FEED_TTL_S = 365 * 24 * 3600;
+
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+  marshallOptions: { removeUndefinedValues: true },
+});
+
+interface Ctx {
+  userId: string;
+  username: string;
+}
+
+// ---- helpers ---------------------------------------------------------------
+
+async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?: boolean } = {}) {
+  const out: Record<string, unknown>[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
+        ExpressionAttributeValues: { ":pk": PK, ":p": prefix },
+        ScanIndexForward: !opts.newestFirst,
+        Limit: opts.limit,
+        ExclusiveStartKey,
+      }),
+    );
+    out.push(...(r.Items ?? []));
+    ExclusiveStartKey = opts.limit ? undefined : r.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+  return out;
+}
+
+function strip<T>(rec: Record<string, unknown>): T {
+  const { PK: _pk, SK: _sk, GSI1PK: _g, ttl: _t, ...rest } = rec;
+  return rest as T;
+}
+
+// AWSJSON fields are returned as plain objects: AppSync serializes them itself, and
+// returning pre-stringified JSON gets double-encoded.
+function itemOut(rec: Record<string, unknown>) {
+  const item = strip<Item>(rec);
+  return { ...item, recurrence: item.recurrence ?? null };
+}
+
+function profileOut(rec: Record<string, unknown>) {
+  const p = strip<Record<string, unknown>>(rec);
+  for (const k of ["defaultView", "savedViews", "alertPrefs"]) p[k] = p[k] ?? null;
+  return p;
+}
+
+function change(rec: Record<string, unknown>) {
+  return { item: itemOut(rec), visibility: rec.visibility as string };
+}
+
+async function getItemFor(ctx: Ctx, id: string) {
+  const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: `ITEM#${id}` } }));
+  if (!r.Item || !canSee(r.Item.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
+  return r.Item;
+}
+
+async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string) {
+  const at = Date.now();
+  const id = `${at}-${Math.random().toString(36).slice(2, 8)}`;
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: {
+        PK, SK: `FEED#${String(at).padStart(15, "0")}#${id}`, id, at, by: ctx.userId, type,
+        itemId: item.id, title: item.title, detail, visibility: item.visibility,
+        ttl: Math.floor(at / 1000) + FEED_TTL_S,
+      },
+    }),
+  );
+}
+
+async function userIds(): Promise<string[]> {
+  return (await queryPrefix("USER#")).map((p) => p.userId as string);
+}
+
+function touch(rec: Record<string, unknown>) {
+  // GSI1 (PK, updatedAt) powers delta sync.
+  return { ...rec, GSI1PK: PK };
+}
+
+// ---- resolvers -------------------------------------------------------------
+
+async function me(ctx: Ctx) {
+  const key = { PK, SK: `USER#${ctx.userId}` };
+  const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: key }));
+  if (r.Item) return profileOut(r.Item);
+  const rec = { ...key, userId: ctx.userId, username: ctx.username, setupComplete: false, updatedAt: Date.now() };
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" })).catch(() => {});
+  return profileOut(rec);
+}
+
+async function snapshot(ctx: Ctx) {
+  const [items, tags, profiles, feedRecs] = await Promise.all([
+    queryPrefix("ITEM#"),
+    queryPrefix("TAG#"),
+    queryPrefix("USER#"),
+    queryPrefix("FEED#", { limit: 100, newestFirst: true }),
+  ]);
+  return {
+    items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
+    tags: tags.map((t) => strip(t)),
+    profiles: profiles.map(profileOut),
+    feed: feedRecs.filter((f) => canSee(f.visibility as string, ctx.userId)).map((f) => strip(f)),
+    serverTime: Date.now(),
+  };
+}
+
+async function completions(ctx: Ctx, args: { itemId: string; limit?: number }) {
+  await getItemFor(ctx, args.itemId);
+  const recs = await queryPrefix(`DONE#${args.itemId}#`, { limit: Math.min(args.limit ?? 50, 500), newestFirst: true });
+  return recs.map((r) => strip(r));
+}
+
+async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: number | null }) {
+  const users = await userIds();
+  const fields = validateItemInput(args.input, ctx.userId, users);
+  const key = { PK, SK: `ITEM#${fields.id}` };
+  const existing = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  if (existing && !canSee(existing.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
+  if (existing && args.expectedVersion != null && existing.version !== args.expectedVersion) {
+    throw new UserError("ConflictError", `item is at version ${existing.version}`);
+  }
+  const now = Date.now();
+  const rec = touch({
+    ...key,
+    ...fields,
+    lastDoneAt: existing?.lastDoneAt,
+    lastDoneBy: existing?.lastDoneBy,
+    createdBy: existing?.createdBy ?? ctx.userId,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    version: ((existing?.version as number) ?? 0) + 1,
+  });
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: rec,
+      ConditionExpression: existing ? "version = :v" : "attribute_not_exists(SK)",
+      ExpressionAttributeValues: existing ? { ":v": existing.version } : undefined,
+    }),
+  ).catch((e) => {
+    if (e.name === "ConditionalCheckFailedException") throw new UserError("ConflictError", "item changed, retry");
+    throw e;
+  });
+  await feed(ctx, existing ? (fields.archived && !existing.archived ? "archived" : "edited") : "created", rec);
+  return change(rec);
+}
+
+async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null; note?: string | null }) {
+  const item = await getItemFor(ctx, args.itemId);
+  const now = Date.now();
+  // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
+  const at = Math.min(Math.round(args.at ?? now), now + 60_000);
+  if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
+  // Deterministic key makes replays from the offline outbox idempotent.
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: { PK, SK: `DONE#${args.itemId}#${String(at).padStart(15, "0")}`, itemId: args.itemId, at, by: ctx.userId, note: args.note || undefined },
+    }),
+  );
+  let rec: Record<string, unknown> = item;
+  try {
+    const r = await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK, SK: `ITEM#${args.itemId}` },
+        // Completion log is the source of truth; lastDoneAt only moves forward.
+        UpdateExpression: "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one REMOVE snoozedUntil",
+        ConditionExpression: "attribute_not_exists(lastDoneAt) OR lastDoneAt < :at",
+        ExpressionAttributeValues: { ":at": at, ":by": ctx.userId, ":now": now, ":one": 1 },
+        ReturnValues: "ALL_NEW",
+      }),
+    );
+    rec = r.Attributes!;
+  } catch (e) {
+    if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
+  }
+  await feed(ctx, "completed", rec, args.note || undefined);
+  return change(rec);
+}
+
+async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
+  await getItemFor(ctx, args.itemId);
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `DONE#${args.itemId}#${String(args.at).padStart(15, "0")}` } }));
+  const [latest] = await queryPrefix(`DONE#${args.itemId}#`, { limit: 1, newestFirst: true });
+  const now = Date.now();
+  const r = await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK, SK: `ITEM#${args.itemId}` },
+      UpdateExpression: latest
+        ? "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one"
+        : "SET updatedAt = :now, version = version + :one REMOVE lastDoneAt, lastDoneBy",
+      ExpressionAttributeValues: latest
+        ? { ":at": latest.at, ":by": latest.by, ":now": now, ":one": 1 }
+        : { ":now": now, ":one": 1 },
+      ReturnValues: "ALL_NEW",
+    }),
+  );
+  await feed(ctx, "undone", r.Attributes!);
+  return change(r.Attributes!);
+}
+
+async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; group: string; color?: string; order?: number } }) {
+  const { id, name, group, color, order } = args.input;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !name.trim() || name.length > 40 || !group.trim() || group.length > 40) {
+    throw new UserError("ValidationError", "bad tag");
+  }
+  const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: rec }));
+  return strip(rec);
+}
+
+async function deleteTag(_ctx: Ctx, args: { id: string }) {
+  const r = await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `TAG#${args.id}` }, ReturnValues: "ALL_OLD" }));
+  if (!r.Attributes) throw new UserError("NotFound", "tag not found");
+  return { ...strip<Record<string, unknown>>(r.Attributes), deleted: true, updatedAt: Date.now() };
+}
+
+async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
+  await me(ctx); // ensure the record exists
+  const fields = validateProfileInput(args.input);
+  const names = Object.keys(fields);
+  const r = await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK, SK: `USER#${ctx.userId}` },
+      UpdateExpression: "SET " + [...names.map((k, i) => `#k${i} = :v${i}`), "updatedAt = :now"].join(", "),
+      ExpressionAttributeNames: Object.fromEntries(names.map((k, i) => [`#k${i}`, k])),
+      ExpressionAttributeValues: { ...Object.fromEntries(names.map((k, i) => [`:v${i}`, fields[k]])), ":now": Date.now() },
+      ReturnValues: "ALL_NEW",
+    }),
+  );
+  return profileOut(r.Attributes!);
+}
+
+const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
+  me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
+};
+
+export async function handler(event: AppSyncResolverEvent<Record<string, unknown>>) {
+  const id = event.identity as AppSyncIdentityCognito;
+  const username = (id?.claims?.["cognito:username"] ?? id?.username) as string;
+  if (!id?.sub || !ALLOWED.includes(username)) throw new Error("Forbidden");
+  const fn = RESOLVERS[event.info.fieldName];
+  if (!fn) throw new Error(`no resolver for ${event.info.fieldName}`);
+  try {
+    return await fn({ userId: id.sub, username }, event.arguments);
+  } catch (e) {
+    if (e instanceof UserError) throw new Error(`${e.type}: ${e.message}`);
+    console.error(e);
+    throw new Error("InternalError");
+  }
+}

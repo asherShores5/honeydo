@@ -1,0 +1,10 @@
+{
+  "name": "aubi-honey",
+  "private": true,
+  "workspaces": ["shared", "api", "infra", "web"],
+  "scripts": {
+    "test": "npm test -w shared -w api",
+    "build:web": "npm run build -w web",
+    "deploy": "npm run build:web && npm run deploy -w infra"
+  }
+}
