@@ -211,7 +211,7 @@ PK = `HH#<householdId>` for everything (one household → one partition, fine at
 | Profile | `USER#<userId>` |
 | Saved view | `VIEW#<userId>#<id>` |
 | Push subscription | `PUSH#<userId>#<deviceId>`: `endpoint`, `p256dh`, `auth`, `createdAt`. `deviceId` is a random ID the app keeps in localStorage, so re-enabling on the same device overwrites the record and a second device adds one. Written by `putPushSubscription` (userId always from the caller's token), removed by `deletePushSubscription` or when the push service answers 404/410. Never in the snapshot or on the Profile, which the partner can read |
-| Notification state | `NSTATE#<itemId>#<userId>` (last alerted, avoids duplicate pushes) |
+| Notification state | `NSTATE#<itemId>#<userId>`: `itemId`, `userId`, `lastAlertedAt` (epoch ms of the last Ding), `ttl` (+30 days, so deleted items clean up). The Notifier claims it with a conditional write (`lastAlertedAt` still equals what it read) before sending, so a duplicate run never sends the same Ding twice |
 
 GSI1 (`PK`, `updatedAt`) is written for a future delta sync; nothing queries it yet. Private items carry `visibility` and are
 filtered in resolvers.

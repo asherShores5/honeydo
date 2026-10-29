@@ -16,6 +16,8 @@ import {
   aws_route53_targets as targets,
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
+  aws_scheduler as scheduler,
+  aws_scheduler_targets as schedulerTargets,
   custom_resources as cr,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
@@ -157,8 +159,8 @@ export function response(ctx) {
     });
 
     // ---- notifier (M4) ----
-    // The Notifier Lambda (m4/04) runs as this role: `new nodejs.NodejsFunction(..., { role: notifierRole })`.
-    // It is the only principal granted the VAPID private key; the API Lambda gets no SSM access.
+    // The Notifier Lambda runs as this role. It is the only principal granted the VAPID private
+    // key; the API Lambda gets no SSM access.
     // The key is a SecureString under the AWS-managed aws/ssm key, which SSM decrypts for any
     // principal allowed GetParameter, so no kms:Decrypt statement is needed.
     const notifierRole = (this.notifierRole = new iam.Role(this, "NotifierRole", {
@@ -173,6 +175,35 @@ export function response(ctx) {
         ),
       }),
     );
+    // Bundled as CJS: web-push is CommonJS and calls require("crypto"), which ESM output can't do.
+    const notifier = new nodejs.NodejsFunction(this, "NotifierFn", {
+      entry: path.join(ROOT, "api", "src", "notifier.ts"),
+      projectRoot: ROOT,
+      depsLockFilePath: path.join(ROOT, "package-lock.json"),
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: Duration.seconds(60),
+      role: notifierRole,
+      // One run at a time; claim-before-send covers a duplicate invoke anyway.
+      reservedConcurrentExecutions: 1,
+      environment: {
+        TABLE_NAME: table.tableName,
+        VAPID_PRIVATE_PARAM: VAPID_PARAMS.private,
+        VAPID_PUBLIC_PARAM: VAPID_PARAMS.public,
+        VAPID_SUBJECT: `mailto:${BUDGET_EMAIL}`,
+      },
+      bundling: { minify: true, sourceMap: true, format: nodejs.OutputFormat.CJS, target: "node22" },
+      logGroup: new logs.LogGroup(this, "NotifierLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+    });
+    table.grantReadWriteData(notifier);
+    // A UTC cron at :00/:15/:30/:45 lines runs up with the HH:MM Slots (a rate would start at
+    // deploy time, e.g. :07). Pacific offsets are whole hours, so UTC quarter-hours work all year.
+    new scheduler.Schedule(this, "NotifierEvery15", {
+      description: "Honey Do Notifier: overdue Dings and Handoffs",
+      schedule: scheduler.ScheduleExpression.cron({ minute: "0/15" }),
+      target: new schedulerTargets.LambdaInvoke(notifier, { retryAttempts: 0 }),
+    });
 
     // ---- VAPID key pair (M4): created by the deploy, never overwritten, kept when the stack goes ----
     // Logic and tests in api/src/vapid.ts. The private key stays in SSM: the resource returns only
@@ -205,6 +236,8 @@ export function response(ctx) {
         logGroup: new logs.LogGroup(this, "VapidKeysProviderLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
       }).serviceToken,
     });
+    // The Notifier (and its schedule, which references it) only comes up once the keys exist.
+    notifier.node.addDependency(vapidKeys);
 
     // ---- web hosting ----
     const zone = route53.HostedZone.fromHostedZoneAttributes(this, "Zone", ZONE);
