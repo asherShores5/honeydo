@@ -107,6 +107,8 @@ type Snapshot {
   tags: [Tag!]!
   profiles: [Profile!]!
   feed: [FeedEvent!]!
+  "The Fridge: unexpired Notes, pinned first, then newest first."
+  notes: [Note!]!
   serverTime: Float!
 }
 
@@ -124,6 +126,22 @@ type ItemChange {
 type PushDevice {
   deviceId: ID!
   enabled: Boolean!
+}
+
+# ---- Fridge Notes (m2/02) ----
+
+"One Note on the Fridge. Append-only: after postNote only pinned and expiresAt change."
+type Note {
+  id: ID!
+  text: String!
+  by: String!
+  at: Float!
+  pinned: Boolean!
+  "Epoch ms; hidden from then on. Null = never expires."
+  expiresAt: Float
+  "Always shared; carried so the subscription filter matches Items'."
+  visibility: String!
+  updatedAt: Float!
 }
 
 type Query {
@@ -144,10 +162,16 @@ type Mutation {
   putPushSubscription(deviceId: ID!, endpoint: String!, p256dh: String!, auth: String!): PushDevice!
   "Turn notifications off on this device."
   deletePushSubscription(deviceId: ID!): PushDevice!
+  "Post a Note on the Fridge. The id comes from the client, so a replay returns the stored Note."
+  postNote(id: ID!, text: String!, pinned: Boolean, expiresAt: Float): Note!
+  pinNote(id: ID!, pinned: Boolean!): Note!
+  "Set the Note's expiry, or clear it with null."
+  setNoteExpiry(id: ID!, expiresAt: Float): Note!
 }
 
 type Subscription {
   onItemChange: ItemChange @aws_subscribe(mutations: ["putItem", "completeItem", "undoCompletion"])
   onTagChange: Tag @aws_subscribe(mutations: ["putTag", "deleteTag"])
   onProfileChange: Profile @aws_subscribe(mutations: ["putProfile"])
+  onNoteChange: Note @aws_subscribe(mutations: ["postNote", "pinNote", "setNoteExpiry"])
 }

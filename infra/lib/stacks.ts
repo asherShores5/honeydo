@@ -179,6 +179,28 @@ export function response(ctx) {
 }`),
     });
 
+    // ---- Fridge Notes (m2/02) ----
+    for (const field of ["postNote", "pinNote", "setNoteExpiry"]) {
+      ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
+    }
+    // Notes are all shared today, but they fan out through the same Visibility filter as Items so
+    // a Private Note could never reach the partner. Mirrored by noteDeliveredTo() in
+    // api/src/testing/harness.ts; keep the two in step.
+    api.addNoneDataSource("NoneNotes").createResolver("SubNotes", {
+      typeName: "Subscription",
+      fieldName: "onNoteChange",
+      runtime: appsync.FunctionRuntime.JS_1_0_0,
+      code: appsync.Code.fromInline(`
+import { util, extensions } from "@aws-appsync/utils";
+export function request() { return { payload: null }; }
+export function response(ctx) {
+  extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter({
+    visibility: { in: ["shared", "private:" + ctx.identity.sub] },
+  }));
+  return null;
+}`),
+    });
+
     // ---- notifier (M4) ----
     // The Notifier Lambda runs as this role. It and the key-provisioning function (VapidKeysFn,
     // below) are the only principals granted the VAPID private key; the API Lambda gets no SSM access.

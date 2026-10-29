@@ -15,6 +15,9 @@ import {
   type ItemInput, type PushSubscriptionInput,
 } from "./rules";
 import { PK, ifConditionFailed, pushKey } from "./table";
+import { fridgeNotes, type Note } from "@aubi/shared";
+import { validateNoteExpiry, validateNoteId, validateNoteInput, type NoteInput } from "./rules";
+import { noteKey } from "./table";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
@@ -188,17 +191,19 @@ async function me(ctx: Ctx) {
 }
 
 async function snapshot(ctx: Ctx) {
-  const [items, tags, profiles, feedRecs] = await Promise.all([
+  const [items, tags, profiles, feedRecs, notes] = await Promise.all([
     queryPrefix("ITEM#"),
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
     visibleActivity(ctx),
+    fridge(ctx),
   ]);
   return {
     items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
     tags: tags.map((t) => strip(t)),
     profiles: profiles.map(profileOut),
     feed: feedRecs.map((f) => strip(f)),
+    notes,
     serverTime: Date.now(),
   };
 }
@@ -445,9 +450,97 @@ async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
   return { deviceId, enabled: false };
 }
 
+// ---- Fridge Notes (m2/02) ---------------------------------------------------
+// Notes are append-only NOTE#<id> records: after postNote only pinned and expiresAt change. Every
+// Note is shared, but it still carries a Visibility and goes through canSee, so the snapshot and
+// the onNoteChange filter treat it like an Item.
+
+/** Expired Notes are kept a week past expiry, then DynamoDB TTL removes them. */
+const NOTE_TTL_GRACE_S = 7 * 24 * 3600;
+
+const noteTtl = (expiresAt: number) => Math.ceil(expiresAt / 1000) + NOTE_TTL_GRACE_S;
+
+function noteOut(rec: Record<string, unknown>): Note {
+  return strip<Note>(rec);
+}
+
+/** The Notes the Fridge shows `ctx` now: none expired, pinned first, then newest first. */
+async function fridge(ctx: Ctx) {
+  const recs = (await queryPrefix("NOTE#")).filter((n) => canSee(n.visibility as string, ctx.userId));
+  return fridgeNotes(recs.map(noteOut), Date.now());
+}
+
+async function postNote(ctx: Ctx, args: NoteInput) {
+  const fields = validateNoteInput(args);
+  const now = Date.now();
+  const rec = {
+    PK, SK: noteKey(fields.id), ...fields, by: ctx.userId, at: now, visibility: "shared", updatedAt: now,
+    ttl: fields.expiresAt === undefined ? undefined : noteTtl(fields.expiresAt),
+  };
+  // The Note and its Activity entry go together, conditional on the ID being new: an outbox
+  // replay (or an ID collision) writes nothing and gets the stored Note back.
+  const written = await ddb
+    .send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" } },
+          {
+            Put: {
+              TableName: TABLE,
+              Item: activityRecord(ctx, "posted", { title: fields.text, visibility: "shared" }, undefined, `note-${fields.id}`),
+            },
+          },
+        ],
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (written) return noteOut(rec);
+  return getNote(ctx, fields.id);
+}
+
+async function getNote(ctx: Ctx, id: string) {
+  const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: noteKey(id) } }));
+  if (!r.Item || !canSee(r.Item.visibility as string, ctx.userId)) throw new UserError("NotFound", "note not found");
+  return noteOut(r.Item);
+}
+
+/** SET `set` (and REMOVE `remove`) on an existing Note; the only edits a Note allows. */
+async function updateNote(ctx: Ctx, id: string, set: Record<string, unknown>, remove: string[] = []) {
+  await getNote(ctx, id);
+  const fields = Object.keys({ ...set, updatedAt: 0 });
+  const values = { ...set, updatedAt: Date.now() } as Record<string, unknown>;
+  const r = await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK, SK: noteKey(id) },
+      UpdateExpression: "SET " + fields.map((f) => `${f} = :${f}`).join(", ") + (remove.length ? ` REMOVE ${remove.join(", ")}` : ""),
+      ConditionExpression: "attribute_exists(SK)",
+      ExpressionAttributeValues: Object.fromEntries(fields.map((f) => [`:${f}`, values[f]])),
+      ReturnValues: "ALL_NEW",
+    }),
+  );
+  return noteOut(r.Attributes!);
+}
+
+async function pinNote(ctx: Ctx, args: { id: string; pinned: boolean }) {
+  return updateNote(ctx, validateNoteId(args.id), { pinned: args.pinned === true });
+}
+
+/** Set or clear (null) a Note's expiry. */
+async function setNoteExpiry(ctx: Ctx, args: { id: string; expiresAt?: number | null }) {
+  const id = validateNoteId(args.id);
+  const expiresAt = validateNoteExpiry(args.expiresAt);
+  return expiresAt === undefined
+    ? updateNote(ctx, id, {}, ["expiresAt", "ttl"])
+    : updateNote(ctx, id, { expiresAt, ttl: noteTtl(expiresAt) });
+}
+
+const FRIDGE_RESOLVERS = { postNote, pinNote, setNoteExpiry };
+
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
   putPushSubscription, deletePushSubscription,
+  ...FRIDGE_RESOLVERS,
 };
 
 export async function handler(event: AppSyncResolverEvent<Record<string, unknown>>) {

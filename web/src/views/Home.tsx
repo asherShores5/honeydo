@@ -9,8 +9,9 @@ import { finishedTasks } from "../finished";
 import { openItem } from "../openItem";
 import { consumePendingItem, usePendingItem } from "../openRequests";
 import { OpenedItem } from "./OpenedItem";
+import { Fridge } from "./Fridge";
 
-type Tab = "ontrack" | "overdue" | "finished" | "activity";
+type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge";
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -125,6 +126,7 @@ export function Home() {
         <button className={tab === "overdue" ? "on red" : "red"} onClick={() => setTab("overdue")}>Overdue <b>{visible.overdue.length}</b></button>
         <button className={tab === "finished" ? "on" : ""} onClick={() => setTab("finished")}>Finished</button>
         <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
+        <button className={tab === "fridge" ? "on" : ""} onClick={() => setTab("fridge")}>Fridge</button>
       </nav>
 
       {(tab === "ontrack" || tab === "overdue") && (
@@ -158,7 +160,9 @@ export function Home() {
       )}
 
       <main>
-        {tab === "activity" ? (
+        {tab === "fridge" ? (
+          <Fridge now={now} />
+        ) : tab === "activity" ? (
           <ul className="feed">
             {feed.length === 0 && <li className="empty">Nothing yet.</li>}
             {feed.map((e) => (

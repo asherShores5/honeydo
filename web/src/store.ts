@@ -1,6 +1,6 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { AlertPrefs, Item } from "@aubi/shared";
+import type { AlertPrefs, Item, Note } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { currentUsername } from "./auth";
 import { applyItemChange, type ItemChange } from "./itemChange";
@@ -31,6 +31,8 @@ interface State {
   tags: Record<string, Tag>;
   profiles: Record<string, Profile>;
   feed: FeedEvent[];
+  /** Fridge Notes by id, expired ones included; show them through fridgeNotes(notes, now). */
+  notes: Record<string, Note>;
   online: boolean;
   live: boolean;
   outbox: Op[];
@@ -42,7 +44,7 @@ const OUTBOX = "aubi.outbox.v1";
 
 let state: State = {
   ready: false,
-  items: {}, tags: {}, profiles: {}, feed: [],
+  items: {}, tags: {}, profiles: {}, feed: [], notes: {},
   online: navigator.onLine, live: false,
   outbox: JSON.parse(localStorage.getItem(OUTBOX) ?? "[]"),
   ...JSON.parse(localStorage.getItem(CACHE) ?? "{}"),
@@ -52,9 +54,9 @@ const listeners = new Set<() => void>();
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
   if ("outbox" in patch) localStorage.setItem(OUTBOX, JSON.stringify(state.outbox));
-  if ("items" in patch || "tags" in patch || "profiles" in patch || "feed" in patch || "me" in patch) {
-    const { me, items, tags, profiles, feed } = state;
-    localStorage.setItem(CACHE, JSON.stringify({ me, items, tags, profiles, feed }));
+  if ("items" in patch || "tags" in patch || "profiles" in patch || "feed" in patch || "notes" in patch || "me" in patch) {
+    const { me, items, tags, profiles, feed, notes } = state;
+    localStorage.setItem(CACHE, JSON.stringify({ me, items, tags, profiles, feed, notes }));
   }
   listeners.forEach((l) => l());
 }
@@ -150,6 +152,7 @@ export async function refresh(serverCopyOf?: string) {
       tags: Object.fromEntries(snapshot.tags.map((t: Tag) => [t.id, clean(t)])),
       profiles,
       feed: snapshot.feed.map(clean),
+      notes: Object.fromEntries(snapshot.notes.map((n: Note) => [n.id, clean(n)])),
       online: true,
     });
   } catch (e) {
@@ -185,6 +188,7 @@ export async function start() {
   rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
   rt.subscribe(Q.onTagChange, (t) => t && applyTag(t));
   rt.subscribe(Q.onProfileChange, (p) => p && applyProfile(p));
+  rt.subscribe(Q.onNoteChange, (n) => n && applyNote(n));
   void rt.connect().catch(() => {});
 
   const resume = () => {
@@ -199,7 +203,7 @@ export async function start() {
 
 /** Drop everything held for the last Member, in memory too, so the next sign-in starts clean. */
 function reset() {
-  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], online: navigator.onLine, live: false, outbox: [] };
+  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], notes: {}, online: navigator.onLine, live: false, outbox: [] };
   listeners.forEach((l) => l());
 }
 
@@ -337,4 +341,55 @@ export function nameOf(userId?: string) {
   if (!userId) return "";
   const p = state.profiles[userId];
   return p?.displayName || p?.username || "someone";
+}
+
+// ---- Fridge Notes (m2/02) ---------------------------------------------------
+// Notes go straight to the server (no outbox): a post shows at once and is taken back if the
+// server refuses it. The client picks the ID, so a retried post never makes a second Note.
+
+/** Take a Note from the server or a live echo; an older copy never replaces a newer one. */
+function applyNote(raw: Note) {
+  const n = clean(raw);
+  const cur = state.notes[n.id];
+  if (cur && cur.updatedAt > n.updatedAt) return;
+  set({ notes: { ...state.notes, [n.id]: n } });
+}
+
+async function sendNote(query: string, vars: object, undo: () => void) {
+  try {
+    applyNote(Object.values(await gql(query, vars))[0] as Note);
+  } catch (e) {
+    undo();
+    toast(`Couldn't save the Note: ${(e as Error).message.replace(/^\w+Error: /, "")}`);
+  }
+}
+
+export function postNote(text: string, opts: { pinned?: boolean; expiresAt?: number } = {}) {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const note: Note = {
+    id, text: text.trim(), by: state.me!.userId, at: now, pinned: !!opts.pinned, expiresAt: opts.expiresAt,
+    visibility: "shared", updatedAt: now,
+  };
+  set({ notes: { ...state.notes, [id]: note } });
+  return sendNote(Q.postNote, { id, text, pinned: !!opts.pinned, expiresAt: opts.expiresAt ?? null }, () => {
+    const { [id]: _gone, ...rest } = state.notes;
+    set({ notes: rest });
+  });
+}
+
+function editNote(id: string, patch: Partial<Note>, query: string, vars: object) {
+  const cur = state.notes[id];
+  if (!cur) return;
+  set({ notes: { ...state.notes, [id]: { ...cur, ...patch } } });
+  return sendNote(query, vars, () => set({ notes: { ...state.notes, [id]: cur } }));
+}
+
+export function pinNote(id: string, pinned: boolean) {
+  return editNote(id, { pinned }, Q.pinNote, { id, pinned });
+}
+
+/** `expiresAt` undefined clears the expiry. */
+export function setNoteExpiry(id: string, expiresAt: number | undefined) {
+  return editNote(id, { expiresAt }, Q.setNoteExpiry, { id, expiresAt: expiresAt ?? null });
 }
