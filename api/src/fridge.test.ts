@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { harness, noteDeliveredTo } from "./testing/harness";
+import { harness } from "./testing/harness";
 
 const h = harness();
 const NOW = 1_800_000_000_000;
@@ -17,9 +17,9 @@ describe("postNote", () => {
   it("puts a shared Note on both Members' Fridge and fans it out to the partner", async () => {
     const note = await post({});
     expect(note).toMatchObject({ id: "n1", text: "Out of diapers", by: h.A.userId, at: NOW, pinned: false, visibility: "shared" });
-    expect(noteDeliveredTo(note, h.B)).toBe(true);
-    expect(noteDeliveredTo(note, h.A)).toBe(true);
-    const { notes } = await h.call(h.B, "snapshot");
+    expect(h.visibilityDeliveredTo(note, h.B)).toBe(true);
+    expect(h.visibilityDeliveredTo(note, h.A)).toBe(true);
+    const { fridgeNotes: notes } = await h.call(h.B, "snapshot");
     expect(notes).toEqual([note]);
   });
 
@@ -53,7 +53,7 @@ describe("postNote", () => {
   });
 });
 
-const fridgeIds = async (member = h.B) => (await h.call(member, "snapshot")).notes.map((n: any) => n.id);
+const fridgeIds = async (member = h.B) => (await h.call(member, "snapshot")).fridgeNotes.map((n: any) => n.id);
 
 describe("pinNote", () => {
   it("the partner can pin and unpin a Note, and the Fridge puts pinned Notes first", async () => {
@@ -62,7 +62,7 @@ describe("pinNote", () => {
     await post({ id: "newer", text: "newer" });
     const pinned = await h.call(h.B, "pinNote", { id: "older", pinned: true });
     expect(pinned).toMatchObject({ id: "older", pinned: true, text: "older", by: h.A.userId, at: NOW, updatedAt: NOW + 1000 });
-    expect(noteDeliveredTo(pinned, h.A)).toBe(true);
+    expect(h.visibilityDeliveredTo(pinned, h.A)).toBe(true);
     expect(await fridgeIds(h.A)).toEqual(["older", "newer"]);
     await h.call(h.A, "pinNote", { id: "older", pinned: false });
     expect(await fridgeIds(h.A)).toEqual(["newer", "older"]);

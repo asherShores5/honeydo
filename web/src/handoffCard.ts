@@ -23,14 +23,23 @@ export interface HandoffCardInput {
   completions: readonly Completion[];
   profiles: Readonly<Record<string, CardProfile>>;
   now: number;
+  /** My last Handoff push, from `me` (lastHandoffAt, lastHandoffSince); undefined if none was sent. */
+  lastHandoff?: LastHandoff;
+}
+
+export interface LastHandoff {
+  /** When it was sent. */
+  at: number;
+  /** The start of the "done" window it covered; null on records from before this was kept. */
+  since?: number | null;
 }
 
 /**
- * The card's Handoff: the latest one (see handoffWindow) as of `now`. At the Handoff time it
- * equals the push; later, Done and Overdue keep up with what happened since.
+ * The card's Handoff: the latest one (see cardWindow) as of `now`. It says what the push said
+ * (or will say, if the push hasn't run yet); later, Done and Overdue keep up with what happened since.
  */
-export function handoffCard({ userId, items, completions, profiles, now }: HandoffCardInput): HandoffContent {
-  const { since, until } = handoffWindow(readAlertPrefs(profiles[userId]?.alertPrefs).handoffAt, now);
+export function handoffCard({ userId, items, completions, profiles, now, lastHandoff }: HandoffCardInput): HandoffContent {
+  const { since, until } = cardWindow(readAlertPrefs(profiles[userId]?.alertPrefs).handoffAt, now, lastHandoff);
   // Same names as the Notifier's (api/src/notifier.ts load and planHandoffs).
   const names = Object.fromEntries(Object.values(profiles).map((p) => [p.userId, p.displayName ?? p.username ?? "your partner"]));
   return buildHandoff({ userId, items, completions, names, since, until, now });
@@ -71,6 +80,19 @@ export function handoffWindow(handoffAt: string, now: number): HandoffWindow {
   const on = (dayOffset: number) => fromWall(w.year, w.month, w.day + dayOffset, hour, minute);
   const back = on(0) <= now ? 0 : -1;
   return { at: on(back), since: on(back - 1), until: on(back + 1) };
+}
+
+/**
+ * The card's window: the scheduled one, with "done" starting where the push's does. The Notifier
+ * counts Done from the previous push, which can run late, so: once the current Handoff has been
+ * pushed, the window that push covered; before that, from the last push (as the coming one will).
+ * With no Handoff sent yet, the scheduled window.
+ */
+export function cardWindow(handoffAt: string, now: number, last: LastHandoff | undefined): HandoffWindow {
+  const w = handoffWindow(handoffAt, now);
+  if (!last) return w;
+  const since = last.at >= w.at ? last.since ?? w.since : last.at;
+  return { ...w, since };
 }
 
 // ---- dismissal ---------------------------------------------------------------

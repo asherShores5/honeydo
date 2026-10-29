@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HOUR, planHandoffs, readAlertPrefs, type Completion, type Item } from "@aubi/shared";
+import { DAY, HOUR, planHandoffs, readAlertPrefs, type Completion, type Item } from "@aubi/shared";
 import { cardDismissed, dismissCard, handoffCard, handoffWindow, itemsDoneSince, withPending, type CardProfile } from "./handoffCard";
 
 const MON_8PM = Date.UTC(2026, 9, 6, 3, 0); // Mon 2026-10-05 20:00 Pacific (PDT)
@@ -72,6 +72,37 @@ describe("handoffCard (the card says what the push says)", () => {
       "Done: Trash (aubyn), Gift (you), Dishes (you)",
       "Due before next Handoff: Pick up prescription, Trash, Baby bath",
     ]);
+  });
+});
+
+describe("handoffCard after a late push (my actual last Handoff, from `me`)", () => {
+  const members = Object.values(profiles).map((p) => ({ userId: p.userId, prefs: readAlertPrefs(p.alertPrefs), name: p.displayName ?? p.username }));
+  const LATE = 40 * 60_000;
+  // Done after Sunday's 20:00 time but before Sunday's push went out at 20:40: Sunday's push said it.
+  const late = [...completions, { itemId: "trash", at: SUN_8PM + 20 * 60_000, by: AUBYN }];
+
+  it("before today's push, its Done starts at yesterday's late push, as today's push will", () => {
+    const [pushed] = planHandoffs(items, late, members, [{ userId: ASHER, lastHandoffAt: SUN_8PM + LATE }], MON_8PM);
+    const card = handoffCard({
+      userId: ASHER, items: asherItems, completions: late, profiles, now: MON_8PM,
+      lastHandoff: { at: SUN_8PM + LATE, since: SUN_8PM - DAY },
+    });
+    expect(card).toEqual(pushed.content);
+    expect(card.since).toBe(SUN_8PM + LATE);
+  });
+
+  it("after today's late push, it covers the same window the push did", () => {
+    const [pushed] = planHandoffs(items, late, members, [{ userId: ASHER, lastHandoffAt: SUN_8PM + LATE }], MON_8PM + LATE);
+    const card = handoffCard({
+      userId: ASHER, items: asherItems, completions: late, profiles, now: MON_8PM + LATE,
+      lastHandoff: { at: MON_8PM + LATE, since: SUN_8PM + LATE },
+    });
+    expect(card).toEqual(pushed.content);
+  });
+
+  it("with no Handoff sent yet (no device, say), falls back to the scheduled window", () => {
+    const card = handoffCard({ userId: ASHER, items: asherItems, completions, profiles, now: MON_8PM + HOUR, lastHandoff: undefined });
+    expect(card.since).toBe(SUN_8PM);
   });
 });
 

@@ -77,8 +77,12 @@ type Profile {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
-  "When the Member last opened Activity (ms). Only moves forward; capped at the server's now."
+  "Own only: when the Member last opened Activity (ms), set by markActivitySeen. Filled on `me`; null on any Profile the partner can read."
   activitySeenAt: Float
+  "Own only, on `me`: when my last Handoff push was sent (HANDOFF record). Null elsewhere."
+  lastHandoffAt: Float
+  "Own only, on `me`: the start of the Done window that push covered. Null elsewhere."
+  lastHandoffSince: Float
   setupComplete: Boolean!
   updatedAt: Float!
 }
@@ -91,8 +95,6 @@ input ProfileInput {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
-  "When the Member last opened Activity (ms). Only moves forward; capped at the server's now."
-  activitySeenAt: Float
   setupComplete: Boolean
 }
 
@@ -112,7 +114,7 @@ type Snapshot {
   profiles: [Profile!]!
   feed: [FeedEvent!]!
   "The Fridge: unexpired Notes, pinned first, then newest first."
-  notes: [Note!]!
+  fridgeNotes: [Note!]!
   serverTime: Float!
 }
 
@@ -132,7 +134,7 @@ type PushDevice {
   enabled: Boolean!
 }
 
-"A short note on one Item (M2). Append-only; it follows its Item's Visibility."
+"A short note on one Item (M2). Append-only. Seen only where both its Item's current Visibility and the Item's Visibility when it was written allow."
 type Comment {
   id: ID!
   itemId: ID!
@@ -141,7 +143,7 @@ type Comment {
   text: String!
 }
 
-"addComment fans out to subscribers through this envelope. visibility is the Item's when written."
+"addComment fans out to subscribers through this envelope. visibility is the Item's when written (a replay: the narrower of that and the Item's now)."
 type CommentChange {
   comment: Comment!
   visibility: String!
@@ -185,6 +187,8 @@ type Mutation {
   putPushSubscription(deviceId: ID!, endpoint: String!, p256dh: String!, auth: String!): PushDevice!
   "Turn notifications off on this device."
   deletePushSubscription(deviceId: ID!): PushDevice!
+  "Save when I last opened Activity (ms); returns the stored time. Only moves forward, capped at the server's now. No subscription listens to it, so the partner never sees it."
+  markActivitySeen(at: Float!): Float!
   "Add a Comment. The client picks id, so a retry with the same id writes nothing twice."
   addComment(itemId: ID!, id: ID!, text: String!): CommentChange!
   "Post a Note on the Fridge. The id comes from the client, so a replay returns the stored Note."

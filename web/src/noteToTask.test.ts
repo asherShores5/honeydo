@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { taskDraft } from "./noteToTask";
+import { linksNote, taskDraft } from "./noteToTask";
+
+describe("linksNote (which saved item marks the Note)", () => {
+  it("a shared Task does", () => {
+    expect(linksNote({ kind: "task", visibility: "shared" })).toBe(true);
+  });
+
+  it("a Private Task doesn't: Notes are shared, so its ID would reach the partner", () => {
+    expect(linksNote({ kind: "task", visibility: "private:sub-a" })).toBe(false);
+  });
+
+  it("a Chore doesn't", () => {
+    expect(linksNote({ kind: "chore", visibility: "shared" })).toBe(false);
+  });
+});
 
 describe("taskDraft", () => {
   it("a short Note becomes the Task's title", () => {

@@ -7,7 +7,7 @@ import { ago, span } from "../format";
 const EXPIRY: { label: string; ms?: number }[] = [
   { label: "No expiry" },
   { label: "1 hour", ms: HOUR },
-  { label: "Tonight (12h)", ms: 12 * HOUR },
+  { label: "12 hours", ms: 12 * HOUR },
   { label: "1 day", ms: DAY },
   { label: "3 days", ms: 3 * DAY },
   { label: "1 week", ms: 7 * DAY },
@@ -24,8 +24,8 @@ const expiryAt = (choice: string, now: number) => {
  * when it's given, each Note shows a "Make Task" button.
  */
 export function Fridge({ now, onMakeTask, onOpenTask }: { now: number; onMakeTask?: (note: Note) => void; onOpenTask?: (taskId: string) => void }) {
-  const notes = useStore((s) => s.notes);
-  const shown = fridgeNotes(notes, now);
+  const all = useStore((s) => s.fridgeNotes);
+  const shown = fridgeNotes(all, now);
   const [text, setText] = useState("");
   const [pinned, setPinned] = useState(false);
   const [expiry, setExpiry] = useState(EXPIRY[0].label);

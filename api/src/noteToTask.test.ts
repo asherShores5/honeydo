@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { harness, noteDeliveredTo } from "./testing/harness";
+import { harness } from "./testing/harness";
 
 // m2/03: a Note turned into a Task stays on the Fridge, marked with the Task it became.
 const h = harness();
@@ -28,8 +28,8 @@ describe("markNoteTasked", () => {
     await noteAndTask();
     const note = await h.call(h.B, "markNoteTasked", { id: "n1", taskId: "t1" });
     expect(note).toMatchObject({ id: "n1", text: "We're out of diapers", taskId: "t1", updatedAt: NOW + 2000 });
-    expect(noteDeliveredTo(note, h.A)).toBe(true);
-    const { notes } = await h.call(h.A, "snapshot");
+    expect(h.visibilityDeliveredTo(note, h.A)).toBe(true);
+    const { fridgeNotes: notes } = await h.call(h.A, "snapshot");
     expect(notes).toEqual([note]);
   });
 
@@ -67,5 +67,23 @@ describe("markNoteTasked", () => {
     const recurrence = JSON.stringify({ type: "interval", every: 7, unit: "days" });
     await h.call(h.A, "putItem", { input: { id: "c1", kind: "chore", title: "Bins", tags: [], visibility: "shared", recurrence } });
     await expect(h.call(h.A, "markNoteTasked", { id: "n1", taskId: "c1" })).rejects.toThrow(/ValidationError/);
+  });
+});
+
+describe("markNoteTasked with a Private Task", () => {
+  it("leaves the Note unmarked, without an error, so a Private Task's ID never reaches the partner", async () => {
+    await noteAndTask();
+    await h.call(h.A, "putItem", { input: task("mine", { visibility: `private:${h.A.userId}` }) });
+    const note = await h.call(h.A, "markNoteTasked", { id: "n1", taskId: "mine" });
+    expect(note.taskId).toBeUndefined();
+    const { fridgeNotes: notes } = await h.call(h.B, "snapshot");
+    expect(notes[0].taskId).toBeUndefined();
+  });
+
+  it("a shared Task can still take the Note afterwards", async () => {
+    await noteAndTask();
+    await h.call(h.A, "putItem", { input: task("mine", { visibility: `private:${h.A.userId}` }) });
+    await h.call(h.A, "markNoteTasked", { id: "n1", taskId: "mine" });
+    expect((await h.call(h.B, "markNoteTasked", { id: "n1", taskId: "t1" })).taskId).toBe("t1");
   });
 });

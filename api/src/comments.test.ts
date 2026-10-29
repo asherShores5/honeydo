@@ -25,8 +25,8 @@ describe("Comments on a shared item", () => {
   it("a Comment on a shared item is published to both", async () => {
     await h.call(h.A, "putItem", { input: task("shared") });
     const c = await h.call(h.B, "addComment", { itemId: "t1", id: "c1", text: "on it" });
-    expect(h.commentDeliveredTo(c, h.A)).toBe(true);
-    expect(h.commentDeliveredTo(c, h.B)).toBe(true);
+    expect(h.visibilityDeliveredTo(c, h.A)).toBe(true);
+    expect(h.visibilityDeliveredTo(c, h.B)).toBe(true);
     expect(c.comment).toMatchObject({ id: "c1", itemId: "t1", by: h.B.userId, text: "on it" });
   });
 });
@@ -43,8 +43,8 @@ describe("Comments on a Private item never reach the partner", () => {
   it("a new Comment is published to the owner only", async () => {
     await h.call(h.A, "putItem", { input: task(privateToA()) });
     const c = await h.call(h.A, "addComment", { itemId: "t1", id: "c1", text: "ring size 6" });
-    expect(h.commentDeliveredTo(c, h.A)).toBe(true);
-    expect(h.commentDeliveredTo(c, h.B)).toBe(false);
+    expect(h.visibilityDeliveredTo(c, h.A)).toBe(true);
+    expect(h.visibilityDeliveredTo(c, h.B)).toBe(false);
   });
 
   it("a Comment on a Private item stays out of the partner's Activity", async () => {
@@ -64,6 +64,37 @@ describe("Comments on a Private item never reach the partner", () => {
     // Shared again: they come back.
     await h.call(h.A, "putItem", { input: task("shared") });
     expect(await h.call(h.B, "comments", { itemId: "t1" })).toHaveLength(1);
+  });
+});
+
+describe("A Comment keeps the Visibility its Item had when it was written (story 36)", () => {
+  it("a Comment written while Private stays hidden from the partner when the item is shared again", async () => {
+    await h.call(h.A, "putItem", { input: task(privateToA()) });
+    await h.call(h.A, "addComment", { itemId: "t1", id: "c1", text: "ring size 6" });
+    await h.call(h.A, "putItem", { input: task("shared") });
+    await h.call(h.A, "addComment", { itemId: "t1", id: "c2", text: "now shared" });
+    expect((await h.call(h.B, "comments", { itemId: "t1" })).map((c: any) => c.id)).toEqual(["c2"]);
+    expect((await h.call(h.A, "comments", { itemId: "t1" })).map((c: any) => c.id).sort()).toEqual(["c1", "c2"]);
+    const { feed } = await h.call(h.B, "snapshot");
+    expect(feed.filter((f: any) => f.type === "commented").map((f: any) => f.detail)).toEqual(["now shared"]);
+  });
+
+  it("a replay after the item is shared again still publishes to the owner only", async () => {
+    await h.call(h.A, "putItem", { input: task(privateToA()) });
+    await h.call(h.A, "addComment", { itemId: "t1", id: "c1", text: "ring size 6" });
+    await h.call(h.A, "putItem", { input: task("shared") });
+    const again = await h.call(h.A, "addComment", { itemId: "t1", id: "c1", text: "ring size 6" });
+    expect(h.visibilityDeliveredTo(again, h.A)).toBe(true);
+    expect(h.visibilityDeliveredTo(again, h.B)).toBe(false);
+  });
+
+  it("a replay after a shared item went Private publishes to the owner only", async () => {
+    await h.call(h.A, "putItem", { input: task("shared") });
+    await h.call(h.A, "addComment", { itemId: "t1", id: "c1", text: "what size?" });
+    await h.call(h.A, "putItem", { input: task(privateToA()) });
+    const again = await h.call(h.A, "addComment", { itemId: "t1", id: "c1", text: "what size?" });
+    expect(h.visibilityDeliveredTo(again, h.A)).toBe(true);
+    expect(h.visibilityDeliveredTo(again, h.B)).toBe(false);
   });
 });
 

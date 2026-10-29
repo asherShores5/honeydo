@@ -11,7 +11,9 @@ export class ApiError extends Error {
 const ITEM = `id kind title notes tags assigneeId visibility severity recurrence dueAt warnWindow
   lastDoneAt lastDoneBy snoozedUntil archived createdBy createdAt updatedAt version`;
 const TAG = `id name group color order deleted updatedAt`;
-const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs activitySeenAt setupComplete updatedAt`;
+const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs setupComplete updatedAt`;
+// Own-only fields: the server fills them on `me` only (null on any Profile the partner reads).
+const ME = `${PROFILE} activitySeenAt lastHandoffAt lastHandoffSince`;
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
 const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
 // Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.
@@ -21,9 +23,10 @@ const COMMENT = `id itemId at by text`;
 const COMMENT_CHANGE = `comment { ${COMMENT} } visibility`;
 
 export const Q = {
-  me: `query { me { ${PROFILE} } }`,
+  me: `query { me { ${ME} } }`,
+  markActivitySeen: `mutation($at: Float!) { markActivitySeen(at: $at) }`,
   snapshot: `query { snapshot { items { ${ITEM} } tags { ${TAG} } profiles { ${PROFILE} }
-    feed { id at by type itemId title detail } notes { ${NOTE} } serverTime } }`,
+    feed { id at by type itemId title detail } fridgeNotes { ${NOTE} } serverTime } }`,
   completions: `query($itemId: ID!, $limit: Int) { completions(itemId: $itemId, limit: $limit) { itemId at by note } }`,
   putItem: `mutation($input: ItemInput!, $expectedVersion: Int) { putItem(input: $input, expectedVersion: $expectedVersion) { ${CHANGE} } }`,
   completeItem: `mutation($itemId: ID!, $at: Float, $note: String) { completeItem(itemId: $itemId, at: $at, note: $note) { ${CHANGE} } }`,

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { readAlertPrefs, type Completion } from "@aubi/shared";
 import { loadCompletionsOf, useStore } from "../store";
-import { cardDismissed, dismissCard, handoffCard, handoffWindow, itemsDoneSince, withPending } from "../handoffCard";
+import { cardDismissed, cardWindow, dismissCard, handoffCard, itemsDoneSince, withPending } from "../handoffCard";
 
 /** Today's Handoff (m2/04): what the push said, kept current, until dismissed or the next one. */
 export function HandoffCard({ now }: { now: number }) {
@@ -10,7 +10,8 @@ export function HandoffCard({ now }: { now: number }) {
   const profiles = useStore((s) => s.profiles);
   const outbox = useStore((s) => s.outbox);
   const { handoffAt } = readAlertPrefs(me.alertPrefs);
-  const { since } = handoffWindow(handoffAt, now);
+  const lastHandoff = me.lastHandoffAt != null ? { at: me.lastHandoffAt, since: me.lastHandoffSince } : undefined;
+  const { since } = cardWindow(handoffAt, now, lastHandoff);
   const [dismissed, setDismissed] = useState(() => cardDismissed(localStorage, me.userId, handoffAt, now));
   const [fetched, setFetched] = useState<Completion[]>([]);
 
@@ -28,8 +29,8 @@ export function HandoffCard({ now }: { now: number }) {
   }, [key, dismissed]);
 
   const content = useMemo(
-    () => handoffCard({ userId: me.userId, items: list, completions: withPending(fetched, outbox, me.userId), profiles, now }),
-    [items, fetched, outbox, profiles, me.userId, now],
+    () => handoffCard({ userId: me.userId, items: list, completions: withPending(fetched, outbox, me.userId), profiles, now, lastHandoff }),
+    [items, fetched, outbox, profiles, me.userId, me.lastHandoffAt, me.lastHandoffSince, now],
   );
 
   if (dismissed) return null;

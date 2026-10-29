@@ -23,6 +23,9 @@ export interface Note {
 /** Longest Note text, after trimming. */
 export const NOTE_MAX = 500;
 
+/** Longest Comment text (on an Item), after trimming. Kept beside NOTE_MAX, the other message limit. */
+export const COMMENT_MAX = 1000;
+
 export function isExpired(note: Pick<Note, "expiresAt">, now: number): boolean {
   return note.expiresAt != null && note.expiresAt <= now;
 }

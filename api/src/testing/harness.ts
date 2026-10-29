@@ -60,20 +60,12 @@ export function deliveredTo(change: { visibility: string; removedFor?: string[] 
 }
 
 /**
- * Whether an onCommentChange subscriber receives this addComment result. Mirrors the subscription
- * filter in infra/lib/stacks.ts ("SubComments" resolver): visibility in ["shared", "private:<sub>"],
- * where visibility is the Comment's Item's at write time. Keep the two in step.
+ * Whether an onNoteChange or onCommentChange subscriber receives this mutation result (a Note, or
+ * an addComment CommentChange). Mirrors VISIBILITY_FILTER in infra/lib/stacks.ts, which both
+ * subscriptions use: visibility in ["shared", "private:<sub>"]. Keep the two in step.
  */
-export function commentDeliveredTo(change: { visibility: string }, member: Member) {
+function visibilityDeliveredTo(change: { visibility: string }, member: Member) {
   return ["shared", `private:${member.userId}`].includes(change.visibility);
-}
-
-/**
- * Whether an onNoteChange subscriber receives this Note (m2/02). Mirrors the "SubNotes" filter in
- * infra/lib/stacks.ts: visibility in ["shared", "private:<sub>"]. Keep the two in step.
- */
-export function noteDeliveredTo(note: { visibility: string }, member: Member) {
-  return ["shared", `private:${member.userId}`].includes(note.visibility);
 }
 
 export function harness() {
@@ -88,6 +80,6 @@ export function harness() {
     call: (member: Member, fieldName: string, args: Record<string, unknown> = {}): Promise<any> =>
       handler(appSyncEvent(member, fieldName, args)),
     deliveredTo,
-    commentDeliveredTo,
+    visibilityDeliveredTo,
   };
 }

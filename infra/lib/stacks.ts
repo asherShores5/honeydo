@@ -155,19 +155,16 @@ export class AppStack extends Stack {
     for (const field of [
       "putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile",
       "putPushSubscription", "deletePushSubscription",
+      // Not in any @aws_subscribe list: the partner must never learn when I read Activity.
+      "markActivitySeen",
     ]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }
-    // ---- Comments (M2) ----
-    ds.createResolver("Qcomments", { typeName: "Query", fieldName: "comments" });
-    ds.createResolver("MaddComment", { typeName: "Mutation", fieldName: "addComment" });
-    // A Comment fans out under its Item's Visibility, so a Comment on a Private item reaches its
-    // owner only. Mirrored by commentDeliveredTo() in api/src/testing/harness.ts; keep in step.
-    api.addNoneDataSource("NoneComments").createResolver("SubComments", {
-      typeName: "Subscription",
-      fieldName: "onCommentChange",
-      runtime: appsync.FunctionRuntime.JS_1_0_0,
-      code: appsync.Code.fromInline(`
+    // Subscription filters run on one None data source.
+    const none = api.addNoneDataSource("None");
+    // Notes and Comments fan out only to Members who can see the envelope's visibility. Mirrored
+    // by visibilityDeliveredTo() in api/src/testing/harness.ts; keep the two in step.
+    const VISIBILITY_FILTER = appsync.Code.fromInline(`
 import { util, extensions } from "@aws-appsync/utils";
 export function request() { return { payload: null }; }
 export function response(ctx) {
@@ -175,13 +172,21 @@ export function response(ctx) {
     visibility: { in: ["shared", "private:" + ctx.identity.sub] },
   }));
   return null;
-}`),
+}`);
+
+    // ---- Comments (M2) ----
+    ds.createResolver("Qcomments", { typeName: "Query", fieldName: "comments" });
+    ds.createResolver("MaddComment", { typeName: "Mutation", fieldName: "addComment" });
+    // A Comment fans out under its stamp (its Item's Visibility when written), so a Comment on a
+    // Private item reaches its owner only.
+    none.createResolver("SubComments", {
+      typeName: "Subscription", fieldName: "onCommentChange", runtime: appsync.FunctionRuntime.JS_1_0_0, code: VISIBILITY_FILTER,
     });
 
     // Private items never fan out to the partner (SPEC §4.5), except the one change that makes a
     // shared item Private: it names the partner in removedFor so their phone drops it live.
     // Mirrored by deliveredTo() in api/src/testing/harness.ts; keep the two in step.
-    api.addNoneDataSource("None").createResolver("SubItems", {
+    none.createResolver("SubItems", {
       typeName: "Subscription",
       fieldName: "onItemChange",
       runtime: appsync.FunctionRuntime.JS_1_0_0,
@@ -203,22 +208,10 @@ export function response(ctx) {
     for (const field of ["postNote", "pinNote", "setNoteExpiry"]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }
-    // Notes are all shared today, but they fan out through the same Visibility filter as Items so
-    // a Private Note could never reach the partner. Mirrored by noteDeliveredTo() in
-    // api/src/testing/harness.ts; keep the two in step.
-    api.addNoneDataSource("NoneNotes").createResolver("SubNotes", {
-      typeName: "Subscription",
-      fieldName: "onNoteChange",
-      runtime: appsync.FunctionRuntime.JS_1_0_0,
-      code: appsync.Code.fromInline(`
-import { util, extensions } from "@aws-appsync/utils";
-export function request() { return { payload: null }; }
-export function response(ctx) {
-  extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter({
-    visibility: { in: ["shared", "private:" + ctx.identity.sub] },
-  }));
-  return null;
-}`),
+    // Notes are all shared today, but they fan out through the same Visibility filter so a Private
+    // Note could never reach the partner.
+    none.createResolver("SubNotes", {
+      typeName: "Subscription", fieldName: "onNoteChange", runtime: appsync.FunctionRuntime.JS_1_0_0, code: VISIBILITY_FILTER,
     });
 
     // ---- Note to Task (m2/03) ---- Fans out through SubNotes like the other Note mutations.
