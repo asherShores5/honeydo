@@ -3,6 +3,7 @@ import { DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "
 import { loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
 import { ago, newId, toLocalInput, when } from "../format";
 import { groupTags } from "./Home";
+import { assigneeWhenPrivate } from "../privateAssignee";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 type Mode = "interval" | "weekly" | "monthly" | "once";
@@ -46,6 +47,11 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
     return { type: "calendar", freq: "monthly", byMonthDay: days.length ? days : [1], at };
   }
 
+  function togglePrivate(on: boolean) {
+    setPrivate(on);
+    if (on) setAssignee(assigneeWhenPrivate(assignee, me.userId));
+  }
+
   const valid = title.trim() && (mode !== "weekly" || weekdays.length > 0);
 
   function save() {
@@ -55,7 +61,7 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
       title: title.trim(),
       notes: notes.trim() || undefined,
       tags: [...selTags],
-      assigneeId: assignee || undefined,
+      assigneeId: (isPrivate ? assigneeWhenPrivate(assignee, me.userId) : assignee) || undefined,
       visibility: (isPrivate ? `private:${me.userId}` : "shared") as Item["visibility"],
       severity: severity || undefined,
       warnWindow: item?.warnWindow,
@@ -139,14 +145,16 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
           </div>
         ))}
 
-        <label>For
-          <div className="seg">
-            <button className={!assignee ? "on" : ""} onClick={() => setAssignee("")}>Either</button>
-            {Object.values(profiles).map((p) => (
-              <button key={p.userId} className={assignee === p.userId ? "on" : ""} onClick={() => setAssignee(p.userId)}>{nameOf(p.userId)}</button>
-            ))}
-          </div>
-        </label>
+        {!isPrivate && (
+          <label>For
+            <div className="seg">
+              <button className={!assignee ? "on" : ""} onClick={() => setAssignee("")}>Either</button>
+              {Object.values(profiles).map((p) => (
+                <button key={p.userId} className={assignee === p.userId ? "on" : ""} onClick={() => setAssignee(p.userId)}>{nameOf(p.userId)}</button>
+              ))}
+            </div>
+          </label>
+        )}
 
         <label>Overdue alerts
           <div className="seg">
@@ -159,7 +167,7 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
           <small>Dings per day while overdue.</small>
         </label>
 
-        <label className="check"><input type="checkbox" checked={isPrivate} onChange={(e) => setPrivate(e.target.checked)} /> Private (only you can see it)</label>
+        <label className="check"><input type="checkbox" checked={isPrivate} onChange={(e) => togglePrivate(e.target.checked)} /> Private (only you can see it)</label>
         <label>Notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={5000} /></label>
 
         {item && live && (
