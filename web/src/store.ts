@@ -1,6 +1,6 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { AlertPrefs, Item } from "@aubi/shared";
+import type { AlertPrefs, Completion, Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { currentUsername } from "./auth";
 import { applyCommentChange, dropItemActivity, type Comment, type CommentChange } from "./comments";
@@ -21,6 +21,8 @@ export type Who = "anyone" | "mine" | "partner" | "unassigned";
 export interface Profile {
   userId: string; username: string; displayName?: string; color?: string; theme?: string; density?: string;
   defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsPatch | null;
+  /** When I last opened Activity (server ms). Read with `unreadActivity`. */
+  activitySeenAt?: number | null;
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
@@ -343,8 +345,32 @@ export async function saveProfile(patch: Partial<Profile>) {
   applyProfile((await gql(Q.putProfile, { input })).putProfile);
 }
 
+/**
+ * Opening Activity: clear the unread marker here at once, then save last seen to the Profile so
+ * my other devices clear too. `at` is the newest entry's server time, so device clocks don't
+ * matter. If the save fails (offline) the next open saves it again.
+ */
+export function markActivitySeen(at: number) {
+  const me = state.me;
+  if (!me || (me.activitySeenAt ?? 0) >= at) return;
+  set({ me: { ...me, activitySeenAt: at } });
+  void saveProfile({ activitySeenAt: at }).catch(() => {});
+}
+
 export async function loadCompletions(itemId: string) {
   return (await gql(Q.completions, { itemId, limit: 50 })).completions as { itemId: string; at: number; by: string; note?: string }[];
+}
+
+/**
+ * The newest Completions of several items in one request: aliased copies of the visibility-checked
+ * `completions` read (the Handoff card's "done", m2/04). `limit` per item.
+ */
+export async function loadCompletionsOf(itemIds: string[], limit = 20): Promise<Completion[]> {
+  if (!itemIds.length) return [];
+  const vars = itemIds.map((_, n) => `$i${n}: ID!`).join(", ");
+  const reads = itemIds.map((_, n) => `c${n}: completions(itemId: $i${n}, limit: ${limit}) { itemId at by }`).join(" ");
+  const data = await gql<Record<string, Completion[]>>(`query(${vars}) { ${reads} }`, Object.fromEntries(itemIds.map((id, n) => [`i${n}`, id])));
+  return Object.values(data).flat();
 }
 
 // ---- Comments (M2) ----------------------------------------------------------
