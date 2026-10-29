@@ -14,10 +14,10 @@ import {
   UserError, canSee, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
   type ItemInput, type PushSubscriptionInput,
 } from "./rules";
+import { PK, ifConditionFailed, pushKey } from "./table";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
-const PK = "HH#aubi";
 const FEED_TTL_S = 365 * 24 * 3600;
 
 type DocClient = Pick<DynamoDBDocumentClient, "send">;
@@ -156,26 +156,6 @@ function touch(rec: Record<string, unknown>) {
 /** Sort key of one Completion; the timestamp is zero-padded so keys sort by time. */
 function completionKey(itemId: string, at: number) {
   return `DONE#${itemId}#${String(at).padStart(15, "0")}`;
-}
-
-/**
- * Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`, and so does a
- * transaction cancelled only by failed conditions. Other errors rethrow.
- */
-function ifConditionFailed<T>(value: T) {
-  return (e: unknown) => {
-    const err = e as Error & { CancellationReasons?: { Code?: string }[] };
-    if (err.name === "ConditionalCheckFailedException") return value;
-    const codes = (err.CancellationReasons ?? []).map((r) => r.Code);
-    if (
-      err.name === "TransactionCanceledException" &&
-      codes.includes("ConditionalCheckFailed") &&
-      codes.every((c) => c === "None" || c === "ConditionalCheckFailed")
-    ) {
-      return value;
-    }
-    throw e;
-  };
 }
 
 /**
@@ -452,7 +432,7 @@ async function putPushSubscription(ctx: Ctx, args: PushSubscriptionInput) {
   await ddb.send(
     new PutCommand({
       TableName: TABLE,
-      Item: { PK, SK: `PUSH#${ctx.userId}#${sub.deviceId}`, userId: ctx.userId, ...sub, createdAt: now },
+      Item: { PK, SK: pushKey(ctx.userId, sub.deviceId), userId: ctx.userId, ...sub, createdAt: now },
     }),
   );
   return { deviceId: sub.deviceId, enabled: true };
@@ -461,7 +441,7 @@ async function putPushSubscription(ctx: Ctx, args: PushSubscriptionInput) {
 /** Turn notifications off on one of the caller's devices. Already off is fine. */
 async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
   const deviceId = validateDeviceId(args.deviceId);
-  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `PUSH#${ctx.userId}#${deviceId}` } }));
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: pushKey(ctx.userId, deviceId) } }));
   return { deviceId, enabled: false };
 }
 

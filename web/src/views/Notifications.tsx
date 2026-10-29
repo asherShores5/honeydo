@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  currentNotificationState, disableNotifications, enableNotifications, resaveSubscription,
+  currentNotificationState, disableNotifications, enableNotifications, onWorkerChange, resaveSubscription,
 } from "../notifications";
 import type { NotificationState } from "../push";
 
 const TEXT: Record<NotificationState, string> = {
   unsupported: "Add Honey Do to your Home Screen (Share, then Add to Home Screen) and open it from there to turn on notifications.",
   blocked: "Notifications are blocked for Honey Do. Turn them on in iOS Settings, Notifications, Honey Do.",
-  off: "Off on this device. Turn on to get overdue dings and your daily Handoff.",
+  off: "Off on this device. Turn on to get overdue Dings and your daily Handoff.",
   unsaved: "On, but not saved yet. It saves when you're back online.",
   on: "On for this device.",
 };
@@ -36,6 +36,8 @@ export function NotificationsStep() {
         await refresh();
       }
     })().catch(() => {});
+    // First launch: the worker may activate after the first check said "unsupported".
+    return onWorkerChange(() => void refresh().catch(() => {}));
   }, []);
 
   function run(action: (r: ServiceWorkerRegistration) => Promise<unknown>) {

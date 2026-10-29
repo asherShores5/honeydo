@@ -18,9 +18,9 @@ import {
   dingPayload, handoffPayload, planDings, planHandoffs, readAlertPrefs,
   type Completion, type DingState, type HandoffState, type Item, type NotifyMember, type PushPayload,
 } from "@aubi/shared";
+import { PK, handoffKey, ifConditionFailed, nstateKey } from "./table";
 
 const TABLE = process.env.TABLE_NAME!;
-const PK = "HH#aubi";
 const NSTATE_TTL_S = 30 * 24 * 3600;
 const PUSH_TIMEOUT_MS = 5000;
 
@@ -150,14 +150,36 @@ interface PushJob {
   options: SendOptions;
 }
 
-function ifConditionFailed<T>(value: T) {
-  return (e: unknown) => {
-    if ((e as Error).name === "ConditionalCheckFailedException") return value;
-    throw e;
-  };
+/**
+ * Claim-before-send: move one state record's `field` from `seen` (the value this run read; absent
+ * if there was none) to `now`, writing `set` alongside. True if this run won the claim; false if
+ * another run already moved it, so that run sent the push.
+ */
+function claimState(sk: string, field: "lastAlertedAt" | "lastHandoffAt", seen: number | undefined, now: number, set: Record<string, unknown>) {
+  const names = Object.keys(set);
+  return ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK, SK: sk },
+        UpdateExpression: "SET " + [...names.map((_, i) => `#s${i} = :s${i}`), `${field} = :now`].join(", "),
+        ConditionExpression: seen === undefined ? `attribute_not_exists(${field})` : `attribute_not_exists(${field}) OR ${field} = :seen`,
+        ExpressionAttributeNames: Object.fromEntries(names.map((k, i) => [`#s${i}`, k])),
+        ExpressionAttributeValues: {
+          ...Object.fromEntries(names.map((k, i) => [`:s${i}`, set[k]])),
+          ":now": now,
+          ...(seen === undefined ? {} : { ":seen": seen }),
+        },
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
 }
 
-/** Same item, same topic, so an offline phone gets one Ding per item rather than a backlog. */
+/**
+ * Same item, same topic, so an offline phone gets one Ding per item rather than a backlog. RFC 8030
+ * §5.4 caps a Topic at 32 characters of the base64url alphabet and item IDs run to 64, so the
+ * topic is "d" plus the first 31 characters of the ID's SHA-256.
+ */
 function topicFor(itemId: string) {
   return "d" + createHash("sha256").update(itemId).digest("base64url").slice(0, 31);
 }
@@ -167,22 +189,9 @@ function dingJobs(snap: Snapshot, now: number): PushJob[] {
     kind: "ding",
     userId: d.userId,
     claim: () =>
-      ddb
-        .send(
-          new UpdateCommand({
-            TableName: TABLE,
-            Key: { PK, SK: `NSTATE#${d.itemId}#${d.userId}` },
-            UpdateExpression: "SET itemId = :i, userId = :u, lastAlertedAt = :now, #ttl = :ttl",
-            ConditionExpression:
-              d.seen === undefined ? "attribute_not_exists(lastAlertedAt)" : "attribute_not_exists(lastAlertedAt) OR lastAlertedAt = :seen",
-            ExpressionAttributeNames: { "#ttl": "ttl" },
-            ExpressionAttributeValues: {
-              ":i": d.itemId, ":u": d.userId, ":now": now, ":ttl": Math.floor(now / 1000) + NSTATE_TTL_S,
-              ...(d.seen === undefined ? {} : { ":seen": d.seen }),
-            },
-          }),
-        )
-        .then(() => true, ifConditionFailed(false)),
+      claimState(nstateKey(d.itemId, d.userId), "lastAlertedAt", d.seen, now, {
+        itemId: d.itemId, userId: d.userId, ttl: Math.floor(now / 1000) + NSTATE_TTL_S,
+      }),
     payload: dingPayload(d.item, now),
     // A Ding is stale after the next Slot; high Severity asks for immediate delivery.
     options: { TTL: 6 * 3600, urgency: d.item.severity === "high" ? "high" : "normal", topic: topicFor(d.itemId) },
@@ -190,25 +199,20 @@ function dingJobs(snap: Snapshot, now: number): PushJob[] {
 }
 
 async function handoffJobs(snap: Snapshot, now: number): Promise<PushJob[]> {
-  // Completions are only read on the few runs where a Handoff is due (planned once without them).
-  if (!planHandoffs(snap.items, [], snap.members, snap.handoffStates, now).length) return [];
+  // Only Members with a device can get a Handoff, so the rest are left out before planning.
+  const subscribed = new Set(snap.subscriptions.map((s) => s.userId));
+  const recipients = snap.members.filter((m) => subscribed.has(m.userId));
+  // Probe step: plan once without Completions, so DONE# is only read on the few runs where a
+  // Handoff is due for someone who can receive it.
+  const probe = planHandoffs(snap.items, [], recipients, snap.handoffStates, now);
+  if (!probe.length) return [];
   const completions = (await queryPrefix("DONE#")) as unknown as Completion[];
-  return planHandoffs(snap.items, completions, snap.members, snap.handoffStates, now).map((p) => ({
+  // The real plan gets every Member, so the partner's name is known for "who did it".
+  const planned = planHandoffs(snap.items, completions, snap.members, snap.handoffStates, now).filter((p) => subscribed.has(p.userId));
+  return planned.map((p) => ({
     kind: "handoff",
     userId: p.userId,
-    claim: () =>
-      ddb
-        .send(
-          new UpdateCommand({
-            TableName: TABLE,
-            Key: { PK, SK: `HANDOFF#${p.userId}` },
-            UpdateExpression: "SET userId = :u, lastHandoffAt = :now",
-            ConditionExpression:
-              p.seen === undefined ? "attribute_not_exists(lastHandoffAt)" : "attribute_not_exists(lastHandoffAt) OR lastHandoffAt = :seen",
-            ExpressionAttributeValues: { ":u": p.userId, ":now": now, ...(p.seen === undefined ? {} : { ":seen": p.seen }) },
-          }),
-        )
-        .then(() => true, ifConditionFailed(false)),
+    claim: () => claimState(handoffKey(p.userId), "lastHandoffAt", p.seen, now, { userId: p.userId }),
     payload: handoffPayload(p.content),
     // Stale by the next morning; a newer Handoff replaces an undelivered one.
     options: { TTL: 12 * 3600, urgency: "normal", topic: "handoff" },
