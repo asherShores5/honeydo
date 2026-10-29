@@ -68,6 +68,10 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     throw new UserError("Forbidden", "items can only be shared or private to yourself");
   }
   if (input.assigneeId && !users.includes(input.assigneeId)) throw new UserError("ValidationError", "unknown assignee");
+  // Story 5: the partner can't see a Private item, so they can't be its Assignee.
+  if (input.visibility !== "shared" && input.assigneeId && input.assigneeId !== userId) {
+    throw new UserError("ValidationError", "a private item can only be assigned to you");
+  }
   if (input.severity && !["low", "medium", "high"].includes(input.severity)) throw new UserError("ValidationError", "bad severity");
   if (input.kind === "chore" && !input.recurrence) throw new UserError("ValidationError", "chores need a recurrence");
   const recurrence = input.recurrence ? parseRecurrence(input.recurrence) : undefined;
