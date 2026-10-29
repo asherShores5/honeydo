@@ -24,6 +24,11 @@ export function chipLabel(tag: Tag, tags: Record<string, Tag>) {
   return collides ? `${tag.name} · ${tag.group}` : tag.name;
 }
 
+/** The IDs that are still Tags. The server rejects an edit that names a deleted Tag. */
+export function liveTags(ids: string[], tags: Record<string, Tag>) {
+  return ids.filter((id) => id in tags);
+}
+
 /** OR within a Tag group, AND across groups (SPEC §4.3). Selected Tags that no longer exist are ignored. */
 export function matchesTags(item: { tags: string[] }, selected: Set<string>, tags: Record<string, Tag>) {
   const byGroup = new Map<string, string[]>();

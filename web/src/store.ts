@@ -4,6 +4,7 @@ import type { Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { applyItemChange, type ItemChange } from "./itemChange";
 import { keepPending, type ItemInput, type Op } from "./outbox";
+import { liveTags } from "./tags";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
 export interface AlertPrefsLite { digestAt?: string; overdueAlerts?: boolean; quietStart?: string; quietEnd?: string }
@@ -190,7 +191,12 @@ let flushing = false;
 
 async function send(op: Op) {
   if (op.type === "putItem") {
-    const input = { ...op.input, recurrence: op.input.recurrence ? JSON.stringify(op.input.recurrence) : null };
+    // flush runs after a refresh on resume, so state.tags reflects Tags deleted while offline.
+    const input = {
+      ...op.input,
+      tags: liveTags(op.input.tags, state.tags),
+      recurrence: op.input.recurrence ? JSON.stringify(op.input.recurrence) : null,
+    };
     return (await gql(Q.putItem, { input, expectedVersion: op.expectedVersion })).putItem;
   }
   if (op.type === "completeItem") return (await gql(Q.completeItem, { itemId: op.itemId, at: op.at, note: op.note })).completeItem;

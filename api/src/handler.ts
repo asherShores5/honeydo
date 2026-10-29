@@ -228,6 +228,10 @@ async function completions(ctx: Ctx, args: { itemId: string; limit?: number }) {
 async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: number | null }) {
   const users = await userIds();
   const fields = validateItemInput(args.input, ctx.userId, users);
+  // A replayed offline edit must not put a deleted Tag's ID back on the item.
+  const tagIds = new Set((await queryPrefix("TAG#")).map((t) => t.id));
+  const unknown = fields.tags.filter((t) => !tagIds.has(t));
+  if (unknown.length) throw new UserError("ValidationError", `unknown tag ${unknown.join(", ")}`);
   const key = { PK, SK: `ITEM#${fields.id}` };
   const existing = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
   if (existing && !canSee(existing.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
@@ -373,36 +377,41 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
  * Clients refresh on the deleted-Tag event to pick up the new versions.
  */
 async function removeTagFromItems(tagId: string) {
+  const carries = (rec: Record<string, unknown> | undefined) => (rec?.tags as string[] | undefined)?.includes(tagId);
   for (const item of await queryPrefix("ITEM#")) {
     let cur: Record<string, unknown> | undefined = item;
-    for (let attempt = 0; cur && (cur.tags as string[] | undefined)?.includes(tagId) && attempt < 5; attempt++) {
-      try {
-        await ddb.send(
+    for (let attempt = 0; carries(cur); attempt++) {
+      // Throw rather than leave the dead ID behind: deleteTag then keeps the Tag and can be retried.
+      if (attempt >= 5) throw new Error(`deleteTag: item ${cur!.SK} kept changing, gave up`);
+      const ok = await ddb
+        .send(
           new UpdateCommand({
             TableName: TABLE,
-            Key: { PK, SK: cur.SK },
+            Key: { PK, SK: cur!.SK },
             UpdateExpression: "SET tags = :tags, updatedAt = :now, version = version + :one",
             ConditionExpression: "version = :v",
             ExpressionAttributeValues: {
-              ":tags": (cur.tags as string[]).filter((t) => t !== tagId),
-              ":now": Date.now(), ":one": 1, ":v": cur.version,
+              ":tags": (cur!.tags as string[]).filter((t) => t !== tagId),
+              ":now": Date.now(), ":one": 1, ":v": cur!.version,
             },
           }),
-        );
-        break;
-      } catch (e) {
-        if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
-        cur = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: cur.SK } }))).Item;
-      }
+        )
+        .then(() => true, ifConditionFailed(false));
+      if (ok) break;
+      cur = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: cur!.SK } }))).Item;
     }
   }
 }
 
 async function deleteTag(_ctx: Ctx, args: { id: string }) {
-  const r = await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `TAG#${args.id}` }, ReturnValues: "ALL_OLD" }));
-  if (!r.Attributes) throw new UserError("NotFound", "tag not found");
+  const key = { PK, SK: `TAG#${args.id}` };
+  const tag = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  if (!tag) throw new UserError("NotFound", "tag not found");
+  // Items first, then the Tag: if this crashes part way the Tag is still there and a retry
+  // finishes the job.
   await removeTagFromItems(args.id);
-  return { ...strip<Record<string, unknown>>(r.Attributes), deleted: true, updatedAt: Date.now() };
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: key }));
+  return { ...strip<Record<string, unknown>>(tag), deleted: true, updatedAt: Date.now() };
 }
 
 async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipLabel, matchesTags, tagId } from "./tags";
+import { chipLabel, liveTags, matchesTags, tagId } from "./tags";
 
 const tag = (group: string, name: string) => ({ id: tagId(group, name), name, group, updatedAt: 0 });
 const index = (...ts: ReturnType<typeof tag>[]) => Object.fromEntries(ts.map((t) => [t.id, t]));
@@ -50,5 +50,11 @@ describe("filters", () => {
 
   it("ignores selected Tags that no longer exist", () => {
     expect(matchesTags({ tags: [] }, new Set(["gone"]), tags)).toBe(true);
+  });
+});
+
+describe("liveTags (before an outbox edit is sent)", () => {
+  it("drops IDs of Tags deleted while the edit waited, so the server doesn't reject it", () => {
+    expect(liveTags([nursery.id, "locale-garage", evening.id], tags)).toEqual([nursery.id, evening.id]);
   });
 });
