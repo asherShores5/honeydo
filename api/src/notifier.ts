@@ -190,10 +190,16 @@ function dingJobs(snap: Snapshot, now: number): PushJob[] {
 }
 
 async function handoffJobs(snap: Snapshot, now: number): Promise<PushJob[]> {
-  // Completions are only read on the few runs where a Handoff is due (planned once without them).
-  if (!planHandoffs(snap.items, [], snap.members, snap.handoffStates, now).length) return [];
+  // Only Members with a device can get a Handoff, so the rest are left out before planning.
+  const subscribed = new Set(snap.subscriptions.map((s) => s.userId));
+  const recipients = snap.members.filter((m) => subscribed.has(m.userId));
+  // Probe step: plan once without Completions, so DONE# is only read on the few runs where a
+  // Handoff is due for someone who can receive it.
+  if (!planHandoffs(snap.items, [], recipients, snap.handoffStates, now).length) return [];
   const completions = (await queryPrefix("DONE#")) as unknown as Completion[];
-  return planHandoffs(snap.items, completions, snap.members, snap.handoffStates, now).map((p) => ({
+  // The real plan gets every Member, so the partner's name is known for "who did it".
+  const planned = planHandoffs(snap.items, completions, snap.members, snap.handoffStates, now).filter((p) => subscribed.has(p.userId));
+  return planned.map((p) => ({
     kind: "handoff",
     userId: p.userId,
     claim: () =>
