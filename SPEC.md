@@ -16,7 +16,7 @@ messages with an async record of who did what, when.
 | Note | Where it lands |
 |---|---|
 | Chore list | §4.1 Chores (seed content still needed — see §11) |
-| Async comms day in day out | §4.4 Activity feed, comments, message board, handoff summary |
+| Async comms day in day out | §4.4 Activity feed, comments, Fridge, Handoff |
 | Date last done of an async chore | §4.1 `lastDoneAt`, derived from completion log |
 | Due date on tasks | §4.1 one-off tasks with `dueAt` |
 | Green until task needs to be done again | §4.2 status colors |
@@ -37,7 +37,7 @@ messages with an async record of who did what, when.
 | Recurrence | Per chore: interval-after-last-done OR fixed calendar schedule |
 | Status | Green → yellow → red |
 | Ownership | Shared by default, optional assignee |
-| Notifications | Web Push: overdue alerts + daily digest/handoff |
+| Notifications | Web Push: overdue alerts + daily Handoff |
 | Profiles | Per-user default view/filters, notification prefs, theme/layout, private items |
 
 ## 4. Functional spec
@@ -113,20 +113,19 @@ text search. Sort: urgency (default), next due, last done, title.
 - **Activity feed** — auto events: completed, created, edited, assigned, commented, note posted.
   "Aubyn did Baby bath · 2:14pm". Each user has an unread marker.
 - **Comments on items** — short threaded notes ("used last of the shampoo").
-- **Message board** — standalone notes not tied to an item, optional pin, optional expiry
-  (fridge-whiteboard style), can be converted into a task.
-- **Daily handoff summary** — generated at each user's chosen time: what got done since the
-  last handoff (by whom), what's overdue, what's due before the next handoff, and new board
-  notes. Shown as an in-app card and sent as a push.
+- **Fridge** — a shared whiteboard of Notes not tied to an item, optional pin, optional
+  expiry, can be converted into a task.
+- **Handoff** — once a day at each user's chosen time: what got done since the last Handoff
+  (by whom), what's overdue, what's due before the next one, and new Fridge notes. Shown as an in-app card and sent as a push.
 
 ### 4.5 Profiles (2)
 
 Per user: display name, color/avatar, default landing view, saved views, theme (light/dark/
 system + accent), density (list / cards / compact), notification prefs (overdue alerts on/off,
-which tags/assignees trigger them, quiet hours, digest time), timezone.
+which tags/assignees trigger them, quiet hours, Handoff time), timezone.
 
 **Private items**: visibility `private:<userId>` items and their completions/comments never
-reach the partner, not in queries, subscriptions, the feed, or the digest. This is enforced
+reach the partner, not in queries, subscriptions, the feed, or the Handoff. This is enforced
 server-side in the resolvers, not only hidden in the UI.
 
 ### 4.6 Notifications (Web Push)
@@ -145,7 +144,7 @@ server-side in the resolvers, not only hidden in the UI.
   The first ding also fires when an item turns red, if that's during waking hours. Quiet hours
   (default 21:00–7:00) shift a slot later rather than dropping it. Assigned items alert only
   the assignee; shared items alert both. Slots are per-user settings.
-- **Digest/handoff**: daily at each user's time (§4.4). The time is **required during first-run
+- **Handoff**: daily at each user's time (§4.4). The time is **required during first-run
   setup** and can be changed in the profile later.
 - Push payload includes a deep link and a "Mark done" action button.
 
@@ -156,10 +155,10 @@ server-side in the resolvers, not only hidden in the UI.
 2. **Today timeline**: items grouped by Time-of-day tag, plus anything due today.
 3. **Calendar**: week/month showing upcoming due dates (projected for recurring) and past
    completions as dots.
-4. **Board by tag**: one column per tag in a chosen group (e.g. Locale → Nursery | Kitchen | Car).
+4. **Tag board**: one column per tag in a chosen group (e.g. Locale → Nursery | Kitchen | Car).
 5. **History & stats**: completion log, who did what, streaks, actual vs target interval
    ("baby bath: target 3d, actual avg 3.4d").
-6. **Feed & Board**: activity feed + message board + today's handoff card.
+6. **Activity & Fridge**: activity feed + Fridge + today's Handoff card.
 7. **Item detail / edit**: recurrence picker, tags, assignee, visibility, comments, completion
    history, backdate/undo.
 8. **Settings / Profile**: theme, views, notifications, tag management, passkey management.
@@ -180,7 +179,7 @@ AppSync GraphQL ── Cognito user pool auth (passkeys)
 DynamoDB (single table, on-demand, PITR on)
    ▲
 Lambda "notifier" ← EventBridge Scheduler (every 15 min): computes newly-red items,
-                    due digests → Web Push (VAPID keys in SSM SecureString)
+                    due Handoffs → Web Push (VAPID keys in SSM SecureString)
 ```
 
 - All resolvers run in one Lambda (`api/src/handler.ts`), which keeps merge, undo and private-item rules in tested TypeScript. It still costs $0 on the free tier.
@@ -191,8 +190,11 @@ Lambda "notifier" ← EventBridge Scheduler (every 15 min): computes newly-red i
   client-generated ID. It replays in order on reconnect. Item edits use optimistic concurrency
   (`version`). On conflict, fields merge last-write-wins and the feed notes "edited while
   offline". Completions/comments/notes are append-only, so they never conflict.
-- On app focus, a delta sync (`changesSince(updatedAt)`) catches anything missed while the
-  WebSocket was closed (iOS kills it in the background).
+- When the app comes back to the foreground, goes back online, or the WebSocket reconnects,
+  the client re-fetches the full snapshot (items, tags, profiles, feed) and then flushes the
+  outbox. This catches anything missed while the WebSocket was closed (iOS kills it in the
+  background). A delta sync (`changesSince(updatedAt)`) is a possible later optimization; it
+  doesn't exist yet.
 
 ### 6.1 DynamoDB single table
 
@@ -203,7 +205,7 @@ PK = `HH#<householdId>` for everything (one household → one partition, fine at
 | Item | `ITEM#<id>` |
 | Completion | `DONE#<itemId>#<isoTs>` |
 | Comment | `CMT#<itemId>#<isoTs>#<id>` |
-| Board note | `NOTE#<id>` |
+| Fridge note | `NOTE#<id>` |
 | Feed event | `FEED#<isoTs>#<id>` (TTL 1 year) |
 | Tag / tag group | `TAG#<id>`, `TGRP#<id>` |
 | Profile | `USER#<userId>` |
@@ -211,7 +213,7 @@ PK = `HH#<householdId>` for everything (one household → one partition, fine at
 | Push subscription | `PUSH#<userId>#<hash>` |
 | Notification state | `NSTATE#<itemId>#<userId>` (last alerted, avoids duplicate pushes) |
 
-GSI1 (`PK`, `updatedAt`) supports delta sync. Private items carry `visibility` and are
+GSI1 (`PK`, `updatedAt`) is written for a future delta sync; nothing queries it yet. Private items carry `visibility` and are
 filtered in resolvers.
 
 ### 6.2 Auth
@@ -229,6 +231,8 @@ filtered in resolvers.
   unverified addresses.
 
 ### 6.3 Repo layout
+
+The repo is public on GitHub by choice. Secrets stay out of it (`.secrets/` is gitignored).
 
 ```
 aubi-honey/
@@ -274,10 +278,10 @@ Secrets Manager ($0.40/secret), and Cognito Plus tier. Set an AWS Budget alarm a
 
 1. ✅ **M1 Core** (deployed 2026-10-19; also includes M2 history/undo/activity feed and M3 offline outbox): CDK infra, auth, items CRUD, recurrence/status, On track/Overdue tabs, tags
    + filters, live sync.
-2. **M2 Comms**: completion history, comments, activity feed, message board.
-3. **M3 Offline + PWA**: IndexedDB, outbox, delta sync, installable app.
-4. **M4 Notifications**: Web Push, overdue alerts, daily handoff digest, quiet hours.
-5. **M5 Views**: Today timeline, calendar, tag board, history/stats, saved views, themes,
+2. **M2 Comms**: completion history, comments, activity feed, Fridge.
+3. **M3 Offline + PWA**: IndexedDB, outbox, installable app (delta sync is optional, later).
+4. **M4 Notifications**: Web Push, overdue alerts, daily Handoff, quiet hours.
+5. **M5 Views**: Today timeline, calendar, Tag board, history/stats, saved views, themes,
    private items.
 6. **M6 Seed & polish**: import your chore list, quick-add syntax, snooze/backdate/undo.
 
@@ -294,7 +298,7 @@ Apple Watch. (Siri Shortcuts calling the API could come later.)
    Other subdomains in this zone are live; only add records, never modify them.
 3. **Core loop confirmed**: "Done" resets to green until the next due point (calendar or N days).
 4. **Yellow**: max(1 day, 10% of interval). **Overdue dings**: 1/2/3 per day by severity.
-   **Digest time**: per user, required at setup. **Timezone**: Pacific, fixed.
+   **Handoff time**: per user, required at setup. **Timezone**: Pacific, fixed.
 5. Defaults taken: completions kept forever; feed events have a 1-year TTL.
 
 ### Seed content

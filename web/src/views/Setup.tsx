@@ -4,7 +4,7 @@ import { saveProfile, useStore } from "../store";
 
 export const COLORS = ["#2f7d4f", "#c2410c", "#7c3aed", "#0e7490", "#be185d", "#a16207"];
 
-/** First-run: name, color, theme, and the required daily summary time (SPEC §4.6). */
+/** First-run: name, color, theme, and the required Handoff time (SPEC §4.6). */
 export function Setup() {
   const me = useStore((s) => s.me!);
   const [name, setName] = useState(me.displayName ?? me.username[0].toUpperCase() + me.username.slice(1));
@@ -58,7 +58,7 @@ export function Setup() {
           ))}
         </div>
       </label>
-      <label>Daily summary time <span className="req">required</span>
+      <label>Handoff time <span className="req">required</span>
         <input type="time" value={digestAt} onChange={(e) => setDigestAt(e.target.value)} />
         <small>Each day at this time you'll get a handoff: what got done, what's overdue, what's coming up.</small>
       </label>

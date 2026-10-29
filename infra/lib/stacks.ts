@@ -122,7 +122,9 @@ export class AppStack extends Stack {
     for (const field of ["putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile"]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }
-    // Private items never fan out to the partner (SPEC §4.5).
+    // Private items never fan out to the partner (SPEC §4.5), except the one change that makes a
+    // shared item Private: it names the partner in removedFor so their phone drops it live.
+    // Mirrored by deliveredTo() in api/src/testing/harness.ts; keep the two in step.
     api.addNoneDataSource("None").createResolver("SubItems", {
       typeName: "Subscription",
       fieldName: "onItemChange",
@@ -132,7 +134,10 @@ import { util, extensions } from "@aws-appsync/utils";
 export function request() { return { payload: null }; }
 export function response(ctx) {
   extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter({
-    visibility: { in: ["shared", "private:" + ctx.identity.sub] },
+    or: [
+      { visibility: { in: ["shared", "private:" + ctx.identity.sub] } },
+      { removedFor: { contains: ctx.identity.sub } },
+    ],
   }));
   return null;
 }`),
