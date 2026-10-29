@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import {
-  CfnOutput, Duration, RemovalPolicy, Stack, type StackProps,
+  CfnOutput, CustomResource, Duration, RemovalPolicy, Stack, type StackProps,
   aws_appsync as appsync,
   aws_budgets as budgets,
   aws_certificatemanager as acm,
@@ -18,7 +18,7 @@ import {
   aws_s3_deployment as s3deploy,
   aws_scheduler as scheduler,
   aws_scheduler_targets as schedulerTargets,
-  aws_ssm as ssm,
+  custom_resources as cr,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 
@@ -29,9 +29,9 @@ export const ZONE = { hostedZoneId: "Z03837921G383RCR4HG5", zoneName: "ashershor
 export const USERNAMES = ["asher", "aubyn"];
 const BUDGET_EMAIL = "asher.shores5@gmail.com";
 /**
- * Web Push VAPID key pair, written once by infra/scripts/create-vapid-keys.ts (CDK can't create a
- * SecureString). The public key goes to the client in config.json; only the Notifier role can read
- * the private one.
+ * Web Push VAPID key pair, created on the first deploy by the VapidKeys custom resource in AppStack
+ * (CloudFormation can't create a SecureString) and never overwritten. The public key goes to the
+ * client in config.json; only the Notifier role can read the private one.
  */
 export const VAPID_PARAMS = { private: "/aubi-honey/vapid/private", public: "/aubi-honey/vapid/public" };
 const ROOT = path.join(__dirname, "..", "..");
@@ -205,6 +205,40 @@ export function response(ctx) {
       target: new schedulerTargets.LambdaInvoke(notifier, { retryAttempts: 0 }),
     });
 
+    // ---- VAPID key pair (M4): created by the deploy, never overwritten, kept when the stack goes ----
+    // Logic and tests in api/src/vapid.ts. The private key stays in SSM: the resource returns only
+    // the public key, which config.json reads from it (a GetAtt, so the keys exist before config.json).
+    const vapidFn = new nodejs.NodejsFunction(this, "VapidKeysFn", {
+      entry: path.join(ROOT, "api", "src", "vapidKeysProvider.ts"),
+      projectRoot: ROOT,
+      depsLockFilePath: path.join(ROOT, "package-lock.json"),
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: Duration.seconds(30),
+      environment: { VAPID_PRIVATE_PARAM: VAPID_PARAMS.private, VAPID_PUBLIC_PARAM: VAPID_PARAMS.public },
+      bundling: { minify: true, format: nodejs.OutputFormat.ESM, target: "node22" },
+      logGroup: new logs.LogGroup(this, "VapidKeysLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+    });
+    // No KMS statement: the AWS-managed aws/ssm key's own policy lets SSM encrypt and decrypt for
+    // any principal in the account that is allowed the SSM call.
+    vapidFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [VAPID_PARAMS.private, VAPID_PARAMS.public].map(
+          (name) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`,
+        ),
+      }),
+    );
+    const vapidKeys = new CustomResource(this, "VapidKeys", {
+      resourceType: "Custom::VapidKeys",
+      serviceToken: new cr.Provider(this, "VapidKeysProvider", {
+        onEventHandler: vapidFn,
+        logGroup: new logs.LogGroup(this, "VapidKeysProviderLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+      }).serviceToken,
+    });
+    // The Notifier (and its schedule, which references it) only comes up once the keys exist.
+    notifier.node.addDependency(vapidKeys);
+
     // ---- web hosting ----
     const zone = route53.HostedZone.fromHostedZoneAttributes(this, "Zone", ZONE);
     const bucket = new s3.Bucket(this, "Web", {
@@ -257,9 +291,9 @@ export function response(ctx) {
           clientId: client.userPoolClientId,
           graphqlUrl: api.graphqlUrl,
           usernames: USERNAMES,
-          // Resolved by CloudFormation at deploy time, so the parameter must exist before the
-          // first deploy that carries this line (run create-vapid-keys.ts first).
-          vapidPublicKey: ssm.StringParameter.valueForStringParameter(this, VAPID_PARAMS.public),
+          // From the VapidKeys resource, not an SSM reference: CloudFormation resolves SSM references
+          // before any resource runs, so on the first deploy the parameter wouldn't exist yet.
+          vapidPublicKey: vapidKeys.getAttString("publicKey"),
         }),
       ],
       // Vite assets are content-hashed; no-cache just forces cheap revalidation of index/config.
