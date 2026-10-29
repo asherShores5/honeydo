@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { schedule, status, urgency, type Item, type Status } from "@aubi/shared";
 import { completeItem, nameOf, saveProfile, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, span } from "../format";
+import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
 import { Settings } from "./Settings";
+import { finishedTasks } from "../finished";
 
-type Tab = "ontrack" | "overdue" | "activity";
+type Tab = "ontrack" | "overdue" | "finished" | "activity";
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -18,22 +20,9 @@ function useNow(ms = 30_000) {
   return now;
 }
 
-export function groupTags(tags: Record<string, Tag>) {
-  const groups = new Map<string, Tag[]>();
-  for (const t of Object.values(tags).sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || a.name.localeCompare(b.name))) {
-    groups.set(t.group, [...(groups.get(t.group) ?? []), t]);
-  }
-  return groups;
-}
-
-/** OR within a tag group, AND across groups (SPEC §4.3). */
+/** Tag filter (OR within a group, AND across groups) plus the Who filter. */
 function matches(item: Item, selected: Set<string>, tags: Record<string, Tag>, who: Who, me: string) {
-  const byGroup = new Map<string, string[]>();
-  for (const id of selected) {
-    const g = tags[id]?.group;
-    if (g) byGroup.set(g, [...(byGroup.get(g) ?? []), id]);
-  }
-  for (const ids of byGroup.values()) if (!ids.some((id) => item.tags.includes(id))) return false;
+  if (!matchesTags(item, selected, tags)) return false;
   if (who === "mine") return item.assigneeId === me;
   if (who === "partner") return !!item.assigneeId && item.assigneeId !== me;
   if (who === "unassigned") return !item.assigneeId;
@@ -84,6 +73,9 @@ export function Home() {
     };
   }, [items, selected, tags, who, me.userId, now]);
 
+  // Done Archives a Task; this tab is how you get back to it and its History.
+  const finished = useMemo(() => finishedTasks(Object.values(items)), [items]);
+
   function toggle(id: string) {
     const s = new Set(selected);
     s.has(id) ? s.delete(id) : s.add(id);
@@ -113,16 +105,17 @@ export function Home() {
       <nav className="tabs">
         <button className={tab === "ontrack" ? "on" : ""} onClick={() => setTab("ontrack")}>On track <b>{visible.ontrack.length}</b></button>
         <button className={tab === "overdue" ? "on red" : "red"} onClick={() => setTab("overdue")}>Overdue <b>{visible.overdue.length}</b></button>
+        <button className={tab === "finished" ? "on" : ""} onClick={() => setTab("finished")}>Finished</button>
         <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
       </nav>
 
-      {tab !== "activity" && (
+      {(tab === "ontrack" || tab === "overdue") && (
         <div className="filters">
           <button className={`chip ${filterCount ? "on" : ""}`} onClick={() => setShowFilters(!showFilters)}>
             Filter{filterCount ? ` · ${filterCount}` : ""} {showFilters ? "▴" : "▾"}
           </button>
           {[...selected].map((id) => tags[id] && (
-            <button key={id} className="chip on" onClick={() => toggle(id)}>{tags[id].name} ✕</button>
+            <button key={id} className="chip on" onClick={() => toggle(id)}>{chipLabel(tags[id], tags)} ✕</button>
           ))}
           {showFilters && (
             <div className="filter-panel">
@@ -155,6 +148,19 @@ export function Home() {
                 <b>{nameOf(e.by)}</b> {e.type} <i>{e.title}</i>
                 {e.detail && <q>{e.detail}</q>}
                 <time>{ago(e.at, now)}</time>
+              </li>
+            ))}
+          </ul>
+        ) : tab === "finished" ? (
+          <ul className="items">
+            {finished.length === 0 && <li className="empty">No finished tasks yet.</li>}
+            {finished.map((i) => (
+              <li key={i.id} className="item done">
+                <button className="body" onClick={() => setEditing(i)}>
+                  <span className="dot" aria-label={LABEL.done} />
+                  <span className="title">{i.title}{i.visibility !== "shared" && <span title="Private"> 🔒</span>}</span>
+                  <span className="meta">done {ago(i.lastDoneAt!, now)}{i.lastDoneBy ? ` by ${nameOf(i.lastDoneBy)}` : ""}</span>
+                </button>
               </li>
             ))}
           </ul>
@@ -207,7 +213,7 @@ function ItemRow({ item, now, tags, onOpen, onDone }: { item: Item; now: number;
           {item.assigneeId && ` · for ${nameOf(item.assigneeId)}`}
         </span>
         {item.tags.length > 0 && (
-          <span className="tags">{item.tags.map((t) => tags[t] && <span key={t}>{tags[t].name}</span>)}</span>
+          <span className="tags">{item.tags.map((t) => tags[t] && <span key={t}>{chipLabel(tags[t], tags)}</span>)}</span>
         )}
       </button>
       <button className="done" onClick={onDone} aria-label={`Mark ${item.title} done`}>✓</button>

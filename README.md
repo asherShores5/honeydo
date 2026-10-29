@@ -4,7 +4,8 @@ A shared chore & to-do app for two, built for a household with a baby. Chores re
 they're done, stay green until they're coming due, turn yellow, then red when overdue, and
 sync live between both phones.
 
-Live at **https://honeydo.ashershores.com** (private; two accounts only).
+Live at **https://honeydo.ashershores.com** (private; two accounts only). The code repo is
+public by choice.
 
 - **Repeating chores:** every N hours/days/weeks after they're done, or on fixed weekdays or
   dates.

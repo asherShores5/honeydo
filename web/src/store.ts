@@ -2,6 +2,9 @@
 import { useSyncExternalStore } from "react";
 import type { Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
+import { applyItemChange, type ItemChange } from "./itemChange";
+import { keepPending, type ItemInput, type Op } from "./outbox";
+import { liveTags } from "./tags";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
 export interface AlertPrefsLite { digestAt?: string; overdueAlerts?: boolean; quietStart?: string; quietEnd?: string }
@@ -13,13 +16,6 @@ export interface Profile {
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
-
-export type ItemInput = Pick<Item, "id" | "kind" | "title" | "notes" | "tags" | "assigneeId" | "visibility" | "severity" | "recurrence" | "dueAt" | "warnWindow" | "snoozedUntil" | "archived">;
-
-type Op =
-  | { id: string; type: "putItem"; input: ItemInput; expectedVersion?: number; changed: (keyof ItemInput)[] }
-  | { id: string; type: "completeItem"; itemId: string; at: number; note?: string }
-  | { id: string; type: "undoCompletion"; itemId: string; at: number };
 
 interface State {
   ready: boolean;
@@ -101,18 +97,30 @@ function profileIn(raw: any): Profile {
   });
 }
 
-function applyItem(raw: any) {
-  const item = itemIn(raw);
-  const cur = state.items[item.id];
-  if (cur && cur.version > item.version) return; // stale echo
-  set({ items: { ...state.items, [item.id]: item } });
+/** `ownResult`: the change is this device's own mutation result, not a live echo. */
+function applyItem(change: ItemChange, ownResult = false) {
+  const items = applyItemChange(state.items, { ...change, item: itemIn(change.item) }, state.me?.userId, {
+    ownResult,
+    refresh: () => void refresh().catch(() => {}),
+  });
+  if (items !== state.items) set({ items });
 }
 
 function applyTag(t: Tag) {
   const tags = { ...state.tags };
-  if (t.deleted) delete tags[t.id];
-  else tags[t.id] = clean(t);
-  set({ tags });
+  if (!t.deleted) {
+    tags[t.id] = clean(t);
+    set({ tags });
+    return;
+  }
+  delete tags[t.id];
+  // deleteTag stripped this Tag from every item server-side and bumped their versions, but it can
+  // only publish the Tag (AppSync fans out a mutation's return value, and onItemChange listens to
+  // ItemChange mutations only). Strip it locally now, then refresh to pick up the new versions.
+  const items = { ...state.items };
+  for (const i of Object.values(items)) if (i.tags.includes(t.id)) items[i.id] = { ...i, tags: i.tags.filter((x) => x !== t.id) };
+  set({ tags, items });
+  void refresh().catch(() => {});
 }
 
 function applyProfile(raw: any) {
@@ -120,13 +128,14 @@ function applyProfile(raw: any) {
   set({ profiles: { ...state.profiles, [p.userId]: p }, ...(state.me?.userId === p.userId ? { me: p } : {}) });
 }
 
-export async function refresh() {
+/** `serverCopyOf`: take this item from the server even if it has pending ops (conflict replay). */
+export async function refresh(serverCopyOf?: string) {
   try {
     const { snapshot } = await gql(Q.snapshot);
-    const items: Record<string, Item> = {};
-    for (const raw of snapshot.items) items[raw.id] = itemIn(raw);
-    // Keep optimistic edits for ops still in the outbox.
-    for (const op of state.outbox) if (op.type !== "putItem" && state.items[op.itemId]) items[op.itemId] = state.items[op.itemId];
+    const fromServer: Record<string, Item> = {};
+    for (const raw of snapshot.items) fromServer[raw.id] = itemIn(raw);
+    // Keep optimistic state (creates, edits, completions) for items with ops still in the outbox.
+    const items = keepPending(fromServer, state.items, state.outbox, serverCopyOf);
     const profiles: Record<string, Profile> = {};
     for (const raw of snapshot.profiles) profiles[raw.userId] = profileIn(raw);
     set({
@@ -155,7 +164,7 @@ export async function start() {
   void flush();
 
   rt = new Realtime(() => void refresh(), (live) => set({ live }));
-  rt.subscribe(Q.onItemChange, (c) => c && applyItem(c.item));
+  rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
   rt.subscribe(Q.onTagChange, (t) => t && applyTag(t));
   rt.subscribe(Q.onProfileChange, (p) => p && applyProfile(p));
   void rt.connect().catch(() => {});
@@ -182,7 +191,12 @@ let flushing = false;
 
 async function send(op: Op) {
   if (op.type === "putItem") {
-    const input = { ...op.input, recurrence: op.input.recurrence ? JSON.stringify(op.input.recurrence) : null };
+    // flush runs after a refresh on resume, so state.tags reflects Tags deleted while offline.
+    const input = {
+      ...op.input,
+      tags: liveTags(op.input.tags, state.tags),
+      recurrence: op.input.recurrence ? JSON.stringify(op.input.recurrence) : null,
+    };
     return (await gql(Q.putItem, { input, expectedVersion: op.expectedVersion })).putItem;
   }
   if (op.type === "completeItem") return (await gql(Q.completeItem, { itemId: op.itemId, at: op.at, note: op.note })).completeItem;
@@ -197,7 +211,7 @@ export async function flush() {
       const op = state.outbox[0];
       try {
         const change = await send(op);
-        applyItem(change.item);
+        applyItem(change, true);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         if (e.kind === "network") {
@@ -206,7 +220,7 @@ export async function flush() {
         }
         if (e.kind === "conflict" && op.type === "putItem") {
           // Field-level last-write-wins: replay only the fields this edit changed on top of the latest server copy.
-          await refresh();
+          await refresh(op.input.id);
           const server = state.items[op.input.id];
           if (server) {
             const merged = { ...toInput(server), ...Object.fromEntries(op.changed.map((k) => [k, op.input[k]])) };
@@ -230,8 +244,11 @@ function enqueue(op: Op) {
 }
 
 export function toInput(i: Item): ItemInput {
-  const { id, kind, title, notes, tags, assigneeId, visibility, severity, recurrence, dueAt, warnWindow, snoozedUntil, archived } = i;
-  return { id, kind, title, notes, tags, assigneeId, visibility, severity, recurrence, dueAt, warnWindow, snoozedUntil, archived };
+  const { id, title, notes, tags, assigneeId, visibility, severity, warnWindow, snoozedUntil, archived } = i;
+  const base = { id, title, notes, tags, assigneeId, visibility, severity, warnWindow, snoozedUntil, archived };
+  return i.kind === "chore"
+    ? { ...base, kind: "chore", recurrence: i.recurrence, dueAt: undefined }
+    : { ...base, kind: "task", recurrence: undefined, dueAt: i.dueAt };
 }
 
 // ---- actions (optimistic) ---------------------------------------------------
@@ -257,7 +274,9 @@ export function saveItem(input: ItemInput) {
 export function completeItem(itemId: string, at = Date.now(), note?: string) {
   const cur = state.items[itemId];
   if (cur && (cur.lastDoneAt ?? 0) < at) {
-    set({ items: { ...state.items, [itemId]: { ...cur, lastDoneAt: at, lastDoneBy: state.me!.userId, snoozedUntil: undefined } } });
+    // Done finishes and Archives a Task (the server does the same); a Chore is only Reset.
+    const archived = cur.kind === "task" ? true : cur.archived;
+    set({ items: { ...state.items, [itemId]: { ...cur, lastDoneAt: at, lastDoneBy: state.me!.userId, snoozedUntil: undefined, archived } } });
   }
   enqueue({ id: crypto.randomUUID(), type: "completeItem", itemId, at, note });
 }

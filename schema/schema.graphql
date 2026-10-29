@@ -114,6 +114,10 @@ type Snapshot {
 type ItemChange {
   item: Item!
   visibility: String!
+  "Members who could see the item before this change and can't now. They drop it from their store."
+  removedFor: [String!]
+  "True when item is a placeholder (only id, version and visibility are real). Receivers not in removedFor refresh."
+  redacted: Boolean
 }
 
 type Query {
