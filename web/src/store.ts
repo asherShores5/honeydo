@@ -105,9 +105,19 @@ function applyItem(change: { item: any; removedFor?: string[] | null }) {
 
 function applyTag(t: Tag) {
   const tags = { ...state.tags };
-  if (t.deleted) delete tags[t.id];
-  else tags[t.id] = clean(t);
-  set({ tags });
+  if (!t.deleted) {
+    tags[t.id] = clean(t);
+    set({ tags });
+    return;
+  }
+  delete tags[t.id];
+  // deleteTag stripped this Tag from every item server-side and bumped their versions, but it can
+  // only publish the Tag (AppSync fans out a mutation's return value, and onItemChange listens to
+  // ItemChange mutations only). Strip it locally now, then refresh to pick up the new versions.
+  const items = { ...state.items };
+  for (const i of Object.values(items)) if (i.tags.includes(t.id)) items[i.id] = { ...i, tags: i.tags.filter((x) => x !== t.id) };
+  set({ tags, items });
+  void refresh().catch(() => {});
 }
 
 function applyProfile(raw: any) {

@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { listPasskeys, registerPasskey, signOut } from "../auth";
 import { removeTag, saveProfile, saveTag, toast, useStore } from "../store";
-import { slug } from "../format";
-import { groupTags } from "./Home";
+import { groupTags, tagId } from "../tags";
 import { COLORS } from "./Setup";
 
 export function Settings({ onClose }: { onClose: () => void }) {
@@ -68,7 +67,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
         <form className="row" onSubmit={(e) => {
           e.preventDefault();
           if (!newTag.name.trim()) return;
-          saveTag({ id: `${slug(newTag.group)}-${slug(newTag.name)}`, name: newTag.name.trim(), group: newTag.group.trim() })
+          saveTag({ id: tagId(newTag.group, newTag.name), name: newTag.name.trim(), group: newTag.group.trim() })
             .then(() => setNewTag({ ...newTag, name: "" }), (err) => toast(err.message));
         }}>
           <input placeholder="New tag" value={newTag.name} onChange={(e) => setNewTag({ ...newTag, name: e.target.value })} />

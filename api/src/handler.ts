@@ -109,9 +109,10 @@ async function getItemFor(ctx: Ctx, id: string) {
   return r.Item;
 }
 
-async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string) {
+/** `eventId` defaults to a random one; pass a deterministic one when the event mirrors a record. */
+async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string, eventId?: string) {
   const at = Date.now();
-  const id = `${at}-${Math.random().toString(36).slice(2, 8)}`;
+  const id = eventId ?? `${at}-${Math.random().toString(36).slice(2, 8)}`;
   await ddb.send(
     new PutCommand({
       TableName: TABLE,
@@ -131,6 +132,19 @@ async function userIds(): Promise<string[]> {
 function touch(rec: Record<string, unknown>) {
   // GSI1 (PK, updatedAt) powers delta sync.
   return { ...rec, GSI1PK: PK };
+}
+
+/** Sort key of one Completion; the timestamp is zero-padded so keys sort by time. */
+function completionKey(itemId: string, at: number) {
+  return `DONE#${itemId}#${String(at).padStart(15, "0")}`;
+}
+
+/** Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`; other errors rethrow. */
+function ifConditionFailed<T>(value: T) {
+  return (e: unknown) => {
+    if ((e as Error).name === "ConditionalCheckFailedException") return value;
+    throw e;
+  };
 }
 
 // ---- resolvers -------------------------------------------------------------
@@ -210,13 +224,21 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
   const at = Math.min(Math.round(args.at ?? now), now + 60_000);
   if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
-  // Deterministic key makes replays from the offline outbox idempotent.
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: { PK, SK: `DONE#${args.itemId}#${String(at).padStart(15, "0")}`, itemId: args.itemId, at, by: ctx.userId, note: args.note || undefined },
-    }),
-  );
+  // Deterministic key makes replays from the offline outbox idempotent: if the Completion
+  // already exists this is a replay, so change nothing and log no second Activity entry.
+  const isNew = await ddb
+    .send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note: args.note || undefined },
+        ConditionExpression: "attribute_not_exists(SK)",
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!isNew) return change(item);
+
+  // A backdated Completion (older than lastDoneAt) still goes in History and Activity, but the
+  // condition below leaves lastDoneAt, and so the Item's Status, unchanged.
   let rec: Record<string, unknown> = item;
   try {
     const r = await ddb.send(
@@ -234,13 +256,26 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   } catch (e) {
     if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
   }
-  await feed(ctx, "completed", rec, args.note || undefined);
+  // Feed event ID comes from the Completion key, so one Completion is one Activity entry.
+  await feed(ctx, "completed", rec, args.note || undefined, `done-${args.itemId}-${at}`);
   return change(rec);
 }
 
 async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
-  await getItemFor(ctx, args.itemId);
-  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `DONE#${args.itemId}#${String(args.at).padStart(15, "0")}` } }));
+  const item = await getItemFor(ctx, args.itemId);
+  // Conditional delete: undo of a Completion that's already gone (outbox replay, or the
+  // partner undid it first) changes nothing and logs no "undone".
+  const existed = await ddb
+    .send(
+      new DeleteCommand({
+        TableName: TABLE,
+        Key: { PK, SK: completionKey(args.itemId, args.at) },
+        ConditionExpression: "attribute_exists(SK)",
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!existed) return change(item);
+
   const [latest] = await queryPrefix(`DONE#${args.itemId}#`, { limit: 1, newestFirst: true });
   const now = Date.now();
   const r = await ddb.send(
@@ -266,13 +301,57 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
     throw new UserError("ValidationError", "bad tag");
   }
   const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
-  await ddb.send(new PutCommand({ TableName: TABLE, Item: rec }));
+  // A Tag belongs to exactly one Tag group: an ID collision must not move it to another group.
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: rec,
+      ConditionExpression: "attribute_not_exists(SK) OR #g = :g",
+      ExpressionAttributeNames: { "#g": "group" },
+      ExpressionAttributeValues: { ":g": group.trim() },
+    }),
+  ).catch((e) => {
+    if (e.name === "ConditionalCheckFailedException") throw new UserError("ValidationError", "tag ID belongs to another group");
+    throw e;
+  });
   return strip(rec);
+}
+
+/**
+ * Strip a deleted Tag from every item that carries it (all Visibilities), bumping each item's
+ * version so stale edits conflict instead of re-adding the dead ID. One partition, small data.
+ * Clients refresh on the deleted-Tag event to pick up the new versions.
+ */
+async function removeTagFromItems(tagId: string) {
+  for (const item of await queryPrefix("ITEM#")) {
+    let cur: Record<string, unknown> | undefined = item;
+    for (let attempt = 0; cur && (cur.tags as string[] | undefined)?.includes(tagId) && attempt < 5; attempt++) {
+      try {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: TABLE,
+            Key: { PK, SK: cur.SK },
+            UpdateExpression: "SET tags = :tags, updatedAt = :now, version = version + :one",
+            ConditionExpression: "version = :v",
+            ExpressionAttributeValues: {
+              ":tags": (cur.tags as string[]).filter((t) => t !== tagId),
+              ":now": Date.now(), ":one": 1, ":v": cur.version,
+            },
+          }),
+        );
+        break;
+      } catch (e) {
+        if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
+        cur = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: cur.SK } }))).Item;
+      }
+    }
+  }
 }
 
 async function deleteTag(_ctx: Ctx, args: { id: string }) {
   const r = await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `TAG#${args.id}` }, ReturnValues: "ALL_OLD" }));
   if (!r.Attributes) throw new UserError("NotFound", "tag not found");
+  await removeTagFromItems(args.id);
   return { ...strip<Record<string, unknown>>(r.Attributes), deleted: true, updatedAt: Date.now() };
 }
 
