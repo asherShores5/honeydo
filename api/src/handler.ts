@@ -10,7 +10,10 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
 import { readAlertPrefs, type Item } from "@aubi/shared";
-import { UserError, canSee, validateItemInput, validateProfileInput, type ItemInput } from "./rules";
+import {
+  UserError, canSee, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
+  type ItemInput, type PushSubscriptionInput,
+} from "./rules";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
@@ -437,8 +440,34 @@ async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
   return profileOut(r.Attributes!);
 }
 
+/**
+ * Save this device's Web Push subscription. The key is the caller's own sub plus a device ID the
+ * client keeps in localStorage, so re-enabling on the same phone overwrites the old record (new
+ * endpoint, same device) and nobody can write another Member's. PUSH# records never go in the
+ * snapshot or on the Profile, because the partner reads both.
+ */
+async function putPushSubscription(ctx: Ctx, args: PushSubscriptionInput) {
+  const sub = validatePushSubscription(args);
+  const now = Date.now();
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: { PK, SK: `PUSH#${ctx.userId}#${sub.deviceId}`, userId: ctx.userId, ...sub, createdAt: now },
+    }),
+  );
+  return { deviceId: sub.deviceId, enabled: true };
+}
+
+/** Turn notifications off on one of the caller's devices. Already off is fine. */
+async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
+  const deviceId = validateDeviceId(args.deviceId);
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `PUSH#${ctx.userId}#${deviceId}` } }));
+  return { deviceId, enabled: false };
+}
+
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
+  putPushSubscription, deletePushSubscription,
 };
 
 export async function handler(event: AppSyncResolverEvent<Record<string, unknown>>) {

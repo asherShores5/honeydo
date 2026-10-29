@@ -25,6 +25,9 @@ export const Q = {
   putTag: `mutation($input: TagInput!) { putTag(input: $input) { ${TAG} } }`,
   deleteTag: `mutation($id: ID!) { deleteTag(id: $id) { ${TAG} } }`,
   putProfile: `mutation($input: ProfileInput!) { putProfile(input: $input) { ${PROFILE} } }`,
+  putPushSubscription: `mutation($deviceId: ID!, $endpoint: String!, $p256dh: String!, $auth: String!) {
+    putPushSubscription(deviceId: $deviceId, endpoint: $endpoint, p256dh: $p256dh, auth: $auth) { deviceId enabled } }`,
+  deletePushSubscription: `mutation($deviceId: ID!) { deletePushSubscription(deviceId: $deviceId) { deviceId enabled } }`,
   onItemChange: `subscription { onItemChange { ${CHANGE} } }`,
   onTagChange: `subscription { onTagChange { ${TAG} } }`,
   onProfileChange: `subscription { onProfileChange { ${PROFILE} } }`,

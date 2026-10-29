@@ -120,6 +120,12 @@ type ItemChange {
   redacted: Boolean
 }
 
+"One device's Web Push state for the caller. The endpoint and keys are write-only."
+type PushDevice {
+  deviceId: ID!
+  enabled: Boolean!
+}
+
 type Query {
   me: Profile!
   snapshot: Snapshot!
@@ -134,6 +140,10 @@ type Mutation {
   putTag(input: TagInput!): Tag!
   deleteTag(id: ID!): Tag!
   putProfile(input: ProfileInput!): Profile!
+  "Save this device's Web Push subscription. Same deviceId again replaces it."
+  putPushSubscription(deviceId: ID!, endpoint: String!, p256dh: String!, auth: String!): PushDevice!
+  "Turn notifications off on this device."
+  deletePushSubscription(deviceId: ID!): PushDevice!
 }
 
 type Subscription {

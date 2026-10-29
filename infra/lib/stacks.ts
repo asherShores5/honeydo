@@ -16,6 +16,7 @@ import {
   aws_route53_targets as targets,
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
+  aws_ssm as ssm,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 
@@ -25,6 +26,12 @@ const OLD_DOMAIN: string | undefined = undefined;
 export const ZONE = { hostedZoneId: "Z03837921G383RCR4HG5", zoneName: "ashershores.com" };
 export const USERNAMES = ["asher", "aubyn"];
 const BUDGET_EMAIL = "asher.shores5@gmail.com";
+/**
+ * Web Push VAPID key pair, written once by infra/scripts/create-vapid-keys.ts (CDK can't create a
+ * SecureString). The public key goes to the client in config.json; only the Notifier role can read
+ * the private one.
+ */
+export const VAPID_PARAMS = { private: "/aubi-honey/vapid/private", public: "/aubi-honey/vapid/public" };
 const ROOT = path.join(__dirname, "..", "..");
 
 /** CloudFront certificates must live in us-east-1. */
@@ -49,6 +56,9 @@ interface AppStackProps extends StackProps {
 }
 
 export class AppStack extends Stack {
+  /** The role the Notifier Lambda runs as (m4/04); the only reader of the VAPID private key. */
+  readonly notifierRole: iam.Role;
+
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
 
@@ -119,7 +129,10 @@ export class AppStack extends Stack {
     });
     const ds = api.addLambdaDataSource("ApiDs", fn);
     for (const field of ["me", "snapshot", "completions"]) ds.createResolver(`Q${field}`, { typeName: "Query", fieldName: field });
-    for (const field of ["putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile"]) {
+    for (const field of [
+      "putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile",
+      "putPushSubscription", "deletePushSubscription",
+    ]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }
     // Private items never fan out to the partner (SPEC §4.5), except the one change that makes a
@@ -142,6 +155,24 @@ export function response(ctx) {
   return null;
 }`),
     });
+
+    // ---- notifier (M4) ----
+    // The Notifier Lambda (m4/04) runs as this role: `new nodejs.NodejsFunction(..., { role: notifierRole })`.
+    // It is the only principal granted the VAPID private key; the API Lambda gets no SSM access.
+    // The key is a SecureString under the AWS-managed aws/ssm key, which SSM decrypts for any
+    // principal allowed GetParameter, so no kms:Decrypt statement is needed.
+    const notifierRole = (this.notifierRole = new iam.Role(this, "NotifierRole", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")],
+    }));
+    notifierRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: [VAPID_PARAMS.private, VAPID_PARAMS.public].map(
+          (name) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`,
+        ),
+      }),
+    );
 
     // ---- web hosting ----
     const zone = route53.HostedZone.fromHostedZoneAttributes(this, "Zone", ZONE);
@@ -195,6 +226,9 @@ export function response(ctx) {
           clientId: client.userPoolClientId,
           graphqlUrl: api.graphqlUrl,
           usernames: USERNAMES,
+          // Resolved by CloudFormation at deploy time, so the parameter must exist before the
+          // first deploy that carries this line (run create-vapid-keys.ts first).
+          vapidPublicKey: ssm.StringParameter.valueForStringParameter(this, VAPID_PARAMS.public),
         }),
       ],
       // Vite assets are content-hashed; no-cache just forces cheap revalidation of index/config.

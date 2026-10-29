@@ -2,6 +2,7 @@ import { useState } from "react";
 import { registerPasskey } from "../auth";
 import { readAlertPrefs } from "@aubi/shared";
 import { saveProfile, useStore } from "../store";
+import { NotificationsStep } from "./Notifications";
 
 export const COLORS = ["#2f7d4f", "#c2410c", "#7c3aed", "#0e7490", "#be185d", "#a16207"];
 
@@ -73,6 +74,7 @@ export function Setup() {
           </>
         )}
       </div>
+      <NotificationsStep />
       {error && <p className="error">{error}</p>}
       <button className="primary big" disabled={busy || !name.trim() || !handoffAt || passkey === "idle"} onClick={finish}>
         Get started
