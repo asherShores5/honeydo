@@ -5,4 +5,5 @@ export * from "./alerts";
 export * from "./notify";
 export * from "./handoff";
 export * from "./visibility";
+export * from "./activity";
 export * from "./fridge";

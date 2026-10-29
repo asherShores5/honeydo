@@ -95,7 +95,7 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
   return fields;
 }
 
-const PROFILE_KEYS = ["displayName", "color", "theme", "density", "defaultView", "savedViews", "alertPrefs", "setupComplete"] as const;
+const PROFILE_KEYS = ["displayName", "color", "theme", "density", "defaultView", "savedViews", "alertPrefs", "setupComplete", "activitySeenAt"] as const;
 
 export function validateProfileInput(input: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
@@ -106,6 +106,10 @@ export function validateProfileInput(input: Record<string, unknown>) {
       const s = typeof v === "string" ? v : JSON.stringify(v);
       if (s.length > 20_000) throw new UserError("ValidationError", `${k} too large`);
       out[k] = JSON.parse(s);
+    } else if (k === "activitySeenAt") {
+      // When the Member last opened Activity, in ms. putProfile caps it and keeps the later one.
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0) throw new UserError("ValidationError", "bad activitySeenAt");
+      out[k] = v;
     } else if (k === "setupComplete") {
       out[k] = Boolean(v);
     } else {

@@ -54,6 +54,7 @@ header h1 { font-size: 22px; margin: 0; flex: 1; }
 .tabs button b { font-weight: 700; margin-left: 4px; }
 .tabs .on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .tabs .on.red { background: var(--red); border-color: var(--red); color: #fff; }
+.tabs button b.unread { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--red); color: #fff; font-size: 12px; }
 
 .filters { padding: 0 16px 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .filter-panel { width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }

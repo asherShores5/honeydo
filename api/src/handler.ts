@@ -100,6 +100,7 @@ function profileOut(rec: Record<string, unknown>) {
   const p = strip<Record<string, unknown>>(rec);
   for (const k of ["defaultView", "savedViews", "alertPrefs"]) p[k] = p[k] ?? null;
   if (p.alertPrefs) p.alertPrefs = readAlertPrefs(p.alertPrefs);
+  p.activitySeenAt = p.activitySeenAt ?? null;
   return p;
 }
 
@@ -410,6 +411,12 @@ async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
   // rest, the Handoff time included. Saving also rewrites a pre-M4 `digestAt` as `handoffAt`.
   if (fields.alertPrefs && current.alertPrefs) {
     fields.alertPrefs = { ...(current.alertPrefs as object), ...(fields.alertPrefs as object) };
+  }
+  // Activity last seen only moves forward and never past the server's now: a stale device can't
+  // bring old events back as unread, and a fast device clock can't hide events still to come.
+  if (fields.activitySeenAt !== undefined) {
+    const stored = typeof current.activitySeenAt === "number" ? current.activitySeenAt : 0;
+    fields.activitySeenAt = Math.max(stored, Math.min(fields.activitySeenAt as number, Date.now()));
   }
   const names = Object.keys(fields);
   const r = await ddb.send(

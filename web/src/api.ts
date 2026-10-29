@@ -11,7 +11,7 @@ export class ApiError extends Error {
 const ITEM = `id kind title notes tags assigneeId visibility severity recurrence dueAt warnWindow
   lastDoneAt lastDoneBy snoozedUntil archived createdBy createdAt updatedAt version`;
 const TAG = `id name group color order deleted updatedAt`;
-const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs setupComplete updatedAt`;
+const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs activitySeenAt setupComplete updatedAt`;
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
 const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
 // Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.

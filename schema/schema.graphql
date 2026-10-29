@@ -77,6 +77,8 @@ type Profile {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
+  "When the Member last opened Activity (ms). Only moves forward; capped at the server's now."
+  activitySeenAt: Float
   setupComplete: Boolean!
   updatedAt: Float!
 }
@@ -89,6 +91,8 @@ input ProfileInput {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
+  "When the Member last opened Activity (ms). Only moves forward; capped at the server's now."
+  activitySeenAt: Float
   setupComplete: Boolean
 }
 
