@@ -66,7 +66,7 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
       severity: severity || undefined,
       warnWindow: item?.warnWindow,
       snoozedUntil: item?.snoozedUntil,
-      archived: item?.archived ?? false,
+      archived: live?.archived ?? false, // live: undoing a finished Task's Completion un-Archives it
     };
     saveItem(
       mode === "once"
@@ -189,7 +189,7 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
                 </li>
               ))}
             </ul>
-            <button className="danger" onClick={() => (saveItem({ ...toInput(live), archived: true }), onClose())}>Archive</button>
+            {!live.archived && <button className="danger" onClick={() => (saveItem({ ...toInput(live), archived: true }), onClose())}>Archive</button>}
           </>
         )}
       </div>

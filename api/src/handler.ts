@@ -229,6 +229,7 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
     )
     .then(() => true, ifConditionFailed(false));
   if (!isNew) return change(item);
+  const isTask = item.kind === "task";
 
   // A backdated Completion (older than lastDoneAt) still goes in History and Activity, but the
   // condition below leaves lastDoneAt, and so the Item's Status, unchanged.
@@ -239,9 +240,13 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
         TableName: TABLE,
         Key: { PK, SK: `ITEM#${args.itemId}` },
         // Completion log is the source of truth; lastDoneAt only moves forward.
-        UpdateExpression: "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one REMOVE snoozedUntil",
+        // Done finishes a Task, so it is Archived in the same write. A Chore is only Reset.
+        UpdateExpression:
+          "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one" +
+          (isTask ? ", archived = :true" : "") +
+          " REMOVE snoozedUntil",
         ConditionExpression: "attribute_not_exists(lastDoneAt) OR lastDoneAt < :at",
-        ExpressionAttributeValues: { ":at": at, ":by": ctx.userId, ":now": now, ":one": 1 },
+        ExpressionAttributeValues: { ":at": at, ":by": ctx.userId, ":now": now, ":one": 1, ...(isTask ? { ":true": true } : {}) },
         ReturnValues: "ALL_NEW",
       }),
     );
@@ -270,6 +275,7 @@ async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
   if (!existed) return change(item);
 
   const [latest] = await queryPrefix(`DONE#${args.itemId}#`, { limit: 1, newestFirst: true });
+  const restore = !latest && item.kind === "task";
   const now = Date.now();
   const r = await ddb.send(
     new UpdateCommand({
@@ -277,10 +283,11 @@ async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
       Key: { PK, SK: `ITEM#${args.itemId}` },
       UpdateExpression: latest
         ? "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one"
-        : "SET updatedAt = :now, version = version + :one REMOVE lastDoneAt, lastDoneBy",
+        : // No Completions left: a Task is unfinished again, so it comes back off the Archive.
+          "SET updatedAt = :now, version = version + :one" + (restore ? ", archived = :false" : "") + " REMOVE lastDoneAt, lastDoneBy",
       ExpressionAttributeValues: latest
         ? { ":at": latest.at, ":by": latest.by, ":now": now, ":one": 1 }
-        : { ":now": now, ":one": 1 },
+        : { ":now": now, ":one": 1, ...(restore ? { ":false": false } : {}) },
       ReturnValues: "ALL_NEW",
     }),
   );

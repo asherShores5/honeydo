@@ -257,7 +257,9 @@ export function saveItem(input: ItemInput) {
 export function completeItem(itemId: string, at = Date.now(), note?: string) {
   const cur = state.items[itemId];
   if (cur && (cur.lastDoneAt ?? 0) < at) {
-    set({ items: { ...state.items, [itemId]: { ...cur, lastDoneAt: at, lastDoneBy: state.me!.userId, snoozedUntil: undefined } } });
+    // Done finishes and Archives a Task (the server does the same); a Chore is only Reset.
+    const archived = cur.kind === "task" ? true : cur.archived;
+    set({ items: { ...state.items, [itemId]: { ...cur, lastDoneAt: at, lastDoneBy: state.me!.userId, snoozedUntil: undefined, archived } } });
   }
   enqueue({ id: crypto.randomUUID(), type: "completeItem", itemId, at, note });
 }
