@@ -555,7 +555,9 @@ const FRIDGE_RESOLVERS = { postNote, pinNote, setNoteExpiry };
 // ---- Note to Task (m2/03) ---------------------------------------------------
 // "Make Task" keeps the Note on the Fridge and marks it with the Task it became (taskId). The Task
 // is a normal putItem, so its "created" entry is what Activity shows. The first Task wins: a
-// replay, or a second Task for the same Note, leaves the Note as it is.
+// replay, or a second Task for the same Note, leaves the Note as it is. Only a shared Task is
+// linked: Notes are shared, so a Private Task's ID on one would reach the partner. For a Private
+// Task the Note stays unmarked, and that is not an error, so the queued op can't jam the outbox.
 
 async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
   const id = validateNoteId(args.id);
@@ -563,7 +565,7 @@ async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
   const note = await getNote(ctx, id);
   const item = await getItemFor(ctx, taskId);
   if (item.kind !== "task") throw new UserError("ValidationError", "only a Task can come from a Note");
-  if (note.taskId !== undefined) return note;
+  if (note.taskId !== undefined || item.visibility !== "shared") return note;
   const marked = await ddb
     .send(
       new UpdateCommand({

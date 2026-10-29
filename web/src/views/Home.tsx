@@ -13,7 +13,7 @@ import { HandoffCard } from "./HandoffCard";
 import { Fridge } from "./Fridge";
 import type { Note } from "@aubi/shared";
 import { markNoteTasked } from "../store";
-import { taskDraft } from "../noteToTask";
+import { linksNote, taskDraft } from "../noteToTask";
 
 type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge";
 
@@ -240,7 +240,7 @@ export function Home() {
       {fromNote && (
         <Editor
           prefill={taskDraft(fromNote)}
-          onSaved={(s) => s.kind === "task" && markNoteTasked(fromNote.id, s.id)}
+          onSaved={(s) => linksNote(s) && markNoteTasked(fromNote.id, s.id)}
           onClose={() => setFromNote(null)}
         />
       )}

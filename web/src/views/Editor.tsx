@@ -21,7 +21,7 @@ function fromLocalInput(v: string): number | undefined {
 export function Editor({ item, prefill, onSaved, onClose }: {
   item?: Item;
   prefill?: TaskDraft;
-  onSaved?: (saved: { id: string; kind: Item["kind"] }) => void;
+  onSaved?: (saved: Pick<Item, "id" | "kind" | "visibility">) => void;
   onClose: () => void;
 }) {
   const me = useStore((s) => s.me!);
@@ -41,6 +41,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
   const [selTags, setSelTags] = useState(new Set(item?.tags ?? []));
   const [assignee, setAssignee] = useState(item?.assigneeId ?? "");
   const [severity, setSeverity] = useState<Severity | "">(item?.severity ?? "");
+  // A new item (a prefill from a Note included) starts shared.
   const [isPrivate, setPrivate] = useState(item ? item.visibility !== "shared" : false);
   const [notes, setNotes] = useState(item?.notes ?? prefill?.notes ?? "");
   const [lastDone, setLastDone] = useState("");
@@ -111,7 +112,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
     // New chores can start from "last done": otherwise they're due immediately.
     const ld = fromLocalInput(lastDone);
     if (!item && ld && mode !== "once") completeItem(id, ld);
-    onSaved?.({ id, kind: mode === "once" ? "task" : "chore" });
+    onSaved?.({ id, kind: mode === "once" ? "task" : "chore", visibility: common.visibility });
     onClose();
   }
 

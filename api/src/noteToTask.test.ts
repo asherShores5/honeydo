@@ -69,3 +69,21 @@ describe("markNoteTasked", () => {
     await expect(h.call(h.A, "markNoteTasked", { id: "n1", taskId: "c1" })).rejects.toThrow(/ValidationError/);
   });
 });
+
+describe("markNoteTasked with a Private Task", () => {
+  it("leaves the Note unmarked, without an error, so a Private Task's ID never reaches the partner", async () => {
+    await noteAndTask();
+    await h.call(h.A, "putItem", { input: task("mine", { visibility: `private:${h.A.userId}` }) });
+    const note = await h.call(h.A, "markNoteTasked", { id: "n1", taskId: "mine" });
+    expect(note.taskId).toBeUndefined();
+    const { notes } = await h.call(h.B, "snapshot");
+    expect(notes[0].taskId).toBeUndefined();
+  });
+
+  it("a shared Task can still take the Note afterwards", async () => {
+    await noteAndTask();
+    await h.call(h.A, "putItem", { input: task("mine", { visibility: `private:${h.A.userId}` }) });
+    await h.call(h.A, "markNoteTasked", { id: "n1", taskId: "mine" });
+    expect((await h.call(h.B, "markNoteTasked", { id: "n1", taskId: "t1" })).taskId).toBe("t1");
+  });
+});
