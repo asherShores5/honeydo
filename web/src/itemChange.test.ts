@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Item } from "@aubi/shared";
 import { applyItemChange } from "./itemChange";
 
@@ -42,5 +42,32 @@ describe("applyItemChange (onItemChange and mutation results)", () => {
     const items = { t1: item({ version: 3, title: "new" }) };
     const next = applyItemChange(items, { item: item({ version: 2, title: "old" }) }, ME);
     expect(next.t1.title).toBe("new");
+  });
+});
+
+describe("applyItemChange with a redacted change (an item just went Private)", () => {
+  const placeholder = item({ title: "", visibility: `private:${OWNER}`, createdBy: "", createdAt: 0, updatedAt: 0, version: 2 });
+  const redacted = { item: placeholder, removedFor: [ME], redacted: true };
+
+  it("the partner drops the item and doesn't refresh", () => {
+    const refresh = vi.fn();
+    const next = applyItemChange({ t1: item() }, redacted, ME, { refresh });
+    expect(next).toEqual({});
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("the owner's other devices refresh instead of storing the placeholder", () => {
+    const refresh = vi.fn();
+    const next = applyItemChange({ t1: item() }, redacted, OWNER, { refresh });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(next.t1.title).toBe("gift");
+  });
+
+  it("the device that made the edit keeps its local copy, at the new version", () => {
+    const refresh = vi.fn();
+    const local = item({ visibility: `private:${OWNER}`, version: 1 });
+    const next = applyItemChange({ t1: local }, redacted, OWNER, { refresh, ownResult: true });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(next.t1).toEqual({ ...local, version: 2 });
   });
 });

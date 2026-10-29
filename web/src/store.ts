@@ -2,8 +2,9 @@
 import { useSyncExternalStore } from "react";
 import type { Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
-import { applyItemChange } from "./itemChange";
+import { applyItemChange, type ItemChange } from "./itemChange";
 import { keepPending, type ItemInput, type Op } from "./outbox";
+import { liveTags } from "./tags";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
 export interface AlertPrefsLite { digestAt?: string; overdueAlerts?: boolean; quietStart?: string; quietEnd?: string }
@@ -15,8 +16,6 @@ export interface Profile {
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
-
-export type { ItemInput };
 
 interface State {
   ready: boolean;
@@ -98,8 +97,12 @@ function profileIn(raw: any): Profile {
   });
 }
 
-function applyItem(change: { item: any; removedFor?: string[] | null }) {
-  const items = applyItemChange(state.items, { ...change, item: itemIn(change.item) }, state.me?.userId);
+/** `ownResult`: the change is this device's own mutation result, not a live echo. */
+function applyItem(change: ItemChange, ownResult = false) {
+  const items = applyItemChange(state.items, { ...change, item: itemIn(change.item) }, state.me?.userId, {
+    ownResult,
+    refresh: () => void refresh().catch(() => {}),
+  });
   if (items !== state.items) set({ items });
 }
 
@@ -188,7 +191,12 @@ let flushing = false;
 
 async function send(op: Op) {
   if (op.type === "putItem") {
-    const input = { ...op.input, recurrence: op.input.recurrence ? JSON.stringify(op.input.recurrence) : null };
+    // flush runs after a refresh on resume, so state.tags reflects Tags deleted while offline.
+    const input = {
+      ...op.input,
+      tags: liveTags(op.input.tags, state.tags),
+      recurrence: op.input.recurrence ? JSON.stringify(op.input.recurrence) : null,
+    };
     return (await gql(Q.putItem, { input, expectedVersion: op.expectedVersion })).putItem;
   }
   if (op.type === "completeItem") return (await gql(Q.completeItem, { itemId: op.itemId, at: op.at, note: op.note })).completeItem;
@@ -203,7 +211,7 @@ export async function flush() {
       const op = state.outbox[0];
       try {
         const change = await send(op);
-        applyItem(change);
+        applyItem(change, true);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         if (e.kind === "network") {

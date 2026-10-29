@@ -5,6 +5,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
@@ -54,10 +55,10 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
   return out;
 }
 
-const FEED_SIZE = 100;
+const ACTIVITY_SIZE = 100;
 
-/** The newest FEED_SIZE feed events `ctx` may see, newest first. Pages past events hidden from them. */
-async function visibleFeed(ctx: Ctx) {
+/** The newest ACTIVITY_SIZE Activity events `ctx` may see, newest first. Pages past events hidden from them. */
+async function visibleActivity(ctx: Ctx) {
   const out: Record<string, unknown>[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
@@ -67,14 +68,14 @@ async function visibleFeed(ctx: Ctx) {
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
         ExpressionAttributeValues: { ":pk": PK, ":p": "FEED#" },
         ScanIndexForward: false,
-        Limit: FEED_SIZE,
+        Limit: ACTIVITY_SIZE,
         ExclusiveStartKey,
       }),
     );
     out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId)));
     ExclusiveStartKey = r.LastEvaluatedKey;
-  } while (ExclusiveStartKey && out.length < FEED_SIZE);
-  return out.slice(0, FEED_SIZE);
+  } while (ExclusiveStartKey && out.length < ACTIVITY_SIZE);
+  return out.slice(0, ACTIVITY_SIZE);
 }
 
 function strip<T>(rec: Record<string, unknown>): T {
@@ -100,7 +101,22 @@ function profileOut(rec: Record<string, unknown>) {
  * before this change and can't now; the subscription filter delivers it to them as a removal.
  */
 function change(rec: Record<string, unknown>, removedFor: string[] = []) {
+  if (removedFor.length) return redactedChange(rec, removedFor);
   return { item: itemOut(rec), visibility: rec.visibility as string, removedFor };
+}
+
+/**
+ * The envelope for a change that hides an item from someone. AppSync fans out the mutation's
+ * return value to every matching subscriber, so it carries none of the item's content: only id,
+ * version and visibility are real, and the schema's other required fields get placeholders.
+ * Members in removedFor drop the item; anyone else who gets it refreshes to fetch the real copy.
+ */
+function redactedChange(rec: Record<string, unknown>, removedFor: string[]) {
+  const item = {
+    id: rec.id, version: rec.version, visibility: rec.visibility,
+    kind: "task", title: "", tags: [], archived: false, createdBy: "", createdAt: 0, updatedAt: 0, recurrence: null,
+  };
+  return { item, visibility: rec.visibility as string, removedFor, redacted: true };
 }
 
 async function getItemFor(ctx: Ctx, id: string) {
@@ -109,20 +125,19 @@ async function getItemFor(ctx: Ctx, id: string) {
   return r.Item;
 }
 
-/** `eventId` defaults to a random one; pass a deterministic one when the event mirrors a record. */
-async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string, eventId?: string) {
+/** One Activity event record. `eventId` defaults to a random one; pass a deterministic one when the event mirrors a record. */
+function activityRecord(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string, eventId?: string) {
   const at = Date.now();
   const id = eventId ?? `${at}-${Math.random().toString(36).slice(2, 8)}`;
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: {
-        PK, SK: `FEED#${String(at).padStart(15, "0")}#${id}`, id, at, by: ctx.userId, type,
-        itemId: item.id, title: item.title, detail, visibility: item.visibility,
-        ttl: Math.floor(at / 1000) + FEED_TTL_S,
-      },
-    }),
-  );
+  return {
+    PK, SK: `FEED#${String(at).padStart(15, "0")}#${id}`, id, at, by: ctx.userId, type,
+    itemId: item.id, title: item.title, detail, visibility: item.visibility,
+    ttl: Math.floor(at / 1000) + FEED_TTL_S,
+  };
+}
+
+async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string) {
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: activityRecord(ctx, type, item, detail) }));
 }
 
 async function userIds(): Promise<string[]> {
@@ -130,7 +145,7 @@ async function userIds(): Promise<string[]> {
 }
 
 function touch(rec: Record<string, unknown>) {
-  // GSI1 (PK, updatedAt) powers delta sync.
+  // GSI1 (PK, updatedAt) is written for a future delta sync; nothing reads it yet.
   return { ...rec, GSI1PK: PK };
 }
 
@@ -139,11 +154,41 @@ function completionKey(itemId: string, at: number) {
   return `DONE#${itemId}#${String(at).padStart(15, "0")}`;
 }
 
-/** Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`; other errors rethrow. */
+/**
+ * Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`, and so does a
+ * transaction cancelled only by failed conditions. Other errors rethrow.
+ */
 function ifConditionFailed<T>(value: T) {
   return (e: unknown) => {
-    if ((e as Error).name === "ConditionalCheckFailedException") return value;
+    const err = e as Error & { CancellationReasons?: { Code?: string }[] };
+    if (err.name === "ConditionalCheckFailedException") return value;
+    const codes = (err.CancellationReasons ?? []).map((r) => r.Code);
+    if (
+      err.name === "TransactionCanceledException" &&
+      codes.includes("ConditionalCheckFailed") &&
+      codes.every((c) => c === "None" || c === "ConditionalCheckFailed")
+    ) {
+      return value;
+    }
     throw e;
+  };
+}
+
+/**
+ * UpdateCommand input for one Item: SET each field in `set`, bump version, REMOVE `remove`.
+ * Each value's placeholder is `:<field>`, built from the same object as the expression so the two
+ * can't drift apart; conditions may refer to those placeholders.
+ */
+function itemUpdate(itemId: string, set: Record<string, unknown>, remove: string[] = []) {
+  const fields = Object.keys(set);
+  return {
+    TableName: TABLE,
+    Key: { PK, SK: `ITEM#${itemId}` },
+    UpdateExpression:
+      "SET " + [...fields.map((f) => `${f} = :${f}`), "version = version + :one"].join(", ") +
+      (remove.length ? ` REMOVE ${remove.join(", ")}` : ""),
+    ExpressionAttributeValues: { ...Object.fromEntries(fields.map((f) => [`:${f}`, set[f]])), ":one": 1 },
+    ReturnValues: "ALL_NEW" as const,
   };
 }
 
@@ -163,7 +208,7 @@ async function snapshot(ctx: Ctx) {
     queryPrefix("ITEM#"),
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
-    visibleFeed(ctx),
+    visibleActivity(ctx),
   ]);
   return {
     items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
@@ -183,6 +228,10 @@ async function completions(ctx: Ctx, args: { itemId: string; limit?: number }) {
 async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: number | null }) {
   const users = await userIds();
   const fields = validateItemInput(args.input, ctx.userId, users);
+  // A replayed offline edit must not put a deleted Tag's ID back on the item.
+  const tagIds = new Set((await queryPrefix("TAG#")).map((t) => t.id));
+  const unknown = fields.tags.filter((t) => !tagIds.has(t));
+  if (unknown.length) throw new UserError("ValidationError", `unknown tag ${unknown.join(", ")}`);
   const key = { PK, SK: `ITEM#${fields.id}` };
   const existing = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
   if (existing && !canSee(existing.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
@@ -200,17 +249,17 @@ async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: num
     updatedAt: now,
     version: ((existing?.version as number) ?? 0) + 1,
   });
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: rec,
-      ConditionExpression: existing ? "version = :v" : "attribute_not_exists(SK)",
-      ExpressionAttributeValues: existing ? { ":v": existing.version } : undefined,
-    }),
-  ).catch((e) => {
-    if (e.name === "ConditionalCheckFailedException") throw new UserError("ConflictError", "item changed, retry");
-    throw e;
-  });
+  const written = await ddb
+    .send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: rec,
+        ConditionExpression: existing ? "version = :v" : "attribute_not_exists(SK)",
+        ExpressionAttributeValues: existing ? { ":v": existing.version } : undefined,
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!written) throw new UserError("ConflictError", "item changed, retry");
   await feed(ctx, existing ? (fields.archived && !existing.archived ? "archived" : "edited") : "created", rec);
   const lostSight = existing
     ? users.filter((u) => canSee(existing.visibility as string, u) && !canSee(fields.visibility, u))
@@ -224,82 +273,80 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
   const at = Math.min(Math.round(args.at ?? now), now + 60_000);
   if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
-  // Deterministic key makes replays from the offline outbox idempotent: if the Completion
-  // already exists this is a replay, so change nothing and log no second Activity entry.
-  const isNew = await ddb
+  const note = args.note || undefined;
+  // The Completion and its Activity entry are written together. The deterministic key makes
+  // replays from the offline outbox idempotent: if the Completion already exists the
+  // transaction is cancelled and nothing is written twice.
+  await ddb
     .send(
-      new PutCommand({
-        TableName: TABLE,
-        Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note: args.note || undefined },
-        ConditionExpression: "attribute_not_exists(SK)",
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: TABLE,
+              Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note },
+              ConditionExpression: "attribute_not_exists(SK)",
+            },
+          },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "completed", item, note, `done-${args.itemId}-${at}`) } },
+        ],
       }),
     )
-    .then(() => true, ifConditionFailed(false));
-  if (!isNew) return change(item);
-  const isTask = item.kind === "task";
+    .catch(ifConditionFailed(undefined));
 
-  // A backdated Completion (older than lastDoneAt) still goes in History and Activity, but the
-  // condition below leaves lastDoneAt, and so the Item's Status, unchanged.
-  let rec: Record<string, unknown> = item;
-  try {
-    const r = await ddb.send(
+  // Always run, replay or not, so a crash after the transaction heals on replay. The Completion
+  // log is the source of truth and lastDoneAt only moves forward, which makes this idempotent; a
+  // backdated Completion (older than lastDoneAt) leaves lastDoneAt, and so Status, unchanged.
+  // Done finishes a Task, so it is Archived in the same write. A Chore is only Reset.
+  const done = { lastDoneAt: at, lastDoneBy: ctx.userId, updatedAt: now, ...(item.kind === "task" ? { archived: true } : {}) };
+  const rec = await ddb
+    .send(
       new UpdateCommand({
-        TableName: TABLE,
-        Key: { PK, SK: `ITEM#${args.itemId}` },
-        // Completion log is the source of truth; lastDoneAt only moves forward.
-        // Done finishes a Task, so it is Archived in the same write. A Chore is only Reset.
-        UpdateExpression:
-          "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one" +
-          (isTask ? ", archived = :true" : "") +
-          " REMOVE snoozedUntil",
-        ConditionExpression: "attribute_not_exists(lastDoneAt) OR lastDoneAt < :at",
-        ExpressionAttributeValues: { ":at": at, ":by": ctx.userId, ":now": now, ":one": 1, ...(isTask ? { ":true": true } : {}) },
-        ReturnValues: "ALL_NEW",
+        ...itemUpdate(args.itemId, done, ["snoozedUntil"]),
+        ConditionExpression: "attribute_not_exists(lastDoneAt) OR lastDoneAt < :lastDoneAt",
       }),
-    );
-    rec = r.Attributes!;
-  } catch (e) {
-    if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
-  }
-  // Feed event ID comes from the Completion key, so one Completion is one Activity entry.
-  await feed(ctx, "completed", rec, args.note || undefined, `done-${args.itemId}-${at}`);
+    )
+    .then((r) => r.Attributes!, ifConditionFailed(item));
   return change(rec);
 }
 
 async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
   const item = await getItemFor(ctx, args.itemId);
-  // Conditional delete: undo of a Completion that's already gone (outbox replay, or the
-  // partner undid it first) changes nothing and logs no "undone".
-  const existed = await ddb
+  // The delete and its "undone" entry go together, conditional on the Completion existing: undo
+  // of one that's already gone (outbox replay, or the partner undid it first) logs nothing.
+  await ddb
     .send(
-      new DeleteCommand({
-        TableName: TABLE,
-        Key: { PK, SK: completionKey(args.itemId, args.at) },
-        ConditionExpression: "attribute_exists(SK)",
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Delete: {
+              TableName: TABLE,
+              Key: { PK, SK: completionKey(args.itemId, args.at) },
+              ConditionExpression: "attribute_exists(SK)",
+            },
+          },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", item) } },
+        ],
       }),
     )
-    .then(() => true, ifConditionFailed(false));
-  if (!existed) return change(item);
+    .catch(ifConditionFailed(undefined));
 
+  // Always recompute from the Completion log, so a crash after the transaction heals on replay.
+  // The conditions skip the write when the item already matches the log (no version churn).
   const [latest] = await queryPrefix(`DONE#${args.itemId}#`, { limit: 1, newestFirst: true });
-  const restore = !latest && item.kind === "task";
   const now = Date.now();
-  const r = await ddb.send(
-    new UpdateCommand({
-      TableName: TABLE,
-      Key: { PK, SK: `ITEM#${args.itemId}` },
-      UpdateExpression: latest
-        ? "SET lastDoneAt = :at, lastDoneBy = :by, updatedAt = :now, version = version + :one"
-        : // No Completions left: a Task is unfinished again, so it comes back off the Archive.
-          "SET updatedAt = :now, version = version + :one" + (restore ? ", archived = :false" : "") + " REMOVE lastDoneAt, lastDoneBy",
-      ExpressionAttributeValues: latest
-        ? { ":at": latest.at, ":by": latest.by, ":now": now, ":one": 1 }
-        : { ":now": now, ":one": 1, ...(restore ? { ":false": false } : {}) },
-      ReturnValues: "ALL_NEW",
-    }),
-  );
-  await feed(ctx, "undone", r.Attributes!);
-  return change(r.Attributes!);
+  const update = latest
+    ? {
+        ...itemUpdate(args.itemId, { lastDoneAt: latest.at, lastDoneBy: latest.by, updatedAt: now }),
+        ConditionExpression: "attribute_not_exists(lastDoneAt) OR lastDoneAt <> :lastDoneAt",
+      }
+    : {
+        // No Completions left: a Task is unfinished again, so it comes back off the Archive.
+        ...itemUpdate(args.itemId, { updatedAt: now, ...(item.kind === "task" ? { archived: false } : {}) }, ["lastDoneAt", "lastDoneBy"]),
+        ConditionExpression: "attribute_exists(lastDoneAt)",
+      };
+  const rec = await ddb.send(new UpdateCommand(update)).then((r) => r.Attributes!, ifConditionFailed(item));
+  return change(rec);
 }
 
 async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; group: string; color?: string; order?: number } }) {
@@ -309,18 +356,18 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
   }
   const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
   // A Tag belongs to exactly one Tag group: an ID collision must not move it to another group.
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: rec,
-      ConditionExpression: "attribute_not_exists(SK) OR #g = :g",
-      ExpressionAttributeNames: { "#g": "group" },
-      ExpressionAttributeValues: { ":g": group.trim() },
-    }),
-  ).catch((e) => {
-    if (e.name === "ConditionalCheckFailedException") throw new UserError("ValidationError", "tag ID belongs to another group");
-    throw e;
-  });
+  const written = await ddb
+    .send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: rec,
+        ConditionExpression: "attribute_not_exists(SK) OR #g = :g",
+        ExpressionAttributeNames: { "#g": "group" },
+        ExpressionAttributeValues: { ":g": group.trim() },
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!written) throw new UserError("ValidationError", "tag ID belongs to another group");
   return strip(rec);
 }
 
@@ -330,36 +377,41 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
  * Clients refresh on the deleted-Tag event to pick up the new versions.
  */
 async function removeTagFromItems(tagId: string) {
+  const carries = (rec: Record<string, unknown> | undefined) => (rec?.tags as string[] | undefined)?.includes(tagId);
   for (const item of await queryPrefix("ITEM#")) {
     let cur: Record<string, unknown> | undefined = item;
-    for (let attempt = 0; cur && (cur.tags as string[] | undefined)?.includes(tagId) && attempt < 5; attempt++) {
-      try {
-        await ddb.send(
+    for (let attempt = 0; carries(cur); attempt++) {
+      // Throw rather than leave the dead ID behind: deleteTag then keeps the Tag and can be retried.
+      if (attempt >= 5) throw new Error(`deleteTag: item ${cur!.SK} kept changing, gave up`);
+      const ok = await ddb
+        .send(
           new UpdateCommand({
             TableName: TABLE,
-            Key: { PK, SK: cur.SK },
+            Key: { PK, SK: cur!.SK },
             UpdateExpression: "SET tags = :tags, updatedAt = :now, version = version + :one",
             ConditionExpression: "version = :v",
             ExpressionAttributeValues: {
-              ":tags": (cur.tags as string[]).filter((t) => t !== tagId),
-              ":now": Date.now(), ":one": 1, ":v": cur.version,
+              ":tags": (cur!.tags as string[]).filter((t) => t !== tagId),
+              ":now": Date.now(), ":one": 1, ":v": cur!.version,
             },
           }),
-        );
-        break;
-      } catch (e) {
-        if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
-        cur = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: cur.SK } }))).Item;
-      }
+        )
+        .then(() => true, ifConditionFailed(false));
+      if (ok) break;
+      cur = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: cur!.SK } }))).Item;
     }
   }
 }
 
 async function deleteTag(_ctx: Ctx, args: { id: string }) {
-  const r = await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `TAG#${args.id}` }, ReturnValues: "ALL_OLD" }));
-  if (!r.Attributes) throw new UserError("NotFound", "tag not found");
+  const key = { PK, SK: `TAG#${args.id}` };
+  const tag = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  if (!tag) throw new UserError("NotFound", "tag not found");
+  // Items first, then the Tag: if this crashes part way the Tag is still there and a retry
+  // finishes the job.
   await removeTagFromItems(args.id);
-  return { ...strip<Record<string, unknown>>(r.Attributes), deleted: true, updatedAt: Date.now() };
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: key }));
+  return { ...strip<Record<string, unknown>>(tag), deleted: true, updatedAt: Date.now() };
 }
 
 async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
