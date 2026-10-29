@@ -3,6 +3,7 @@ import { readAlertPrefs, type AlertPrefs, type Severity } from "@aubi/shared";
 import { listPasskeys, registerPasskey, signOut } from "../auth";
 import { removeTag, saveProfile, saveTag, toast, useStore } from "../store";
 import { groupTags, tagId } from "../tags";
+import { NotificationsStep } from "./Notifications";
 import { COLORS } from "./Setup";
 
 const SEVERITIES: [Severity, string][] = [["low", "Low"], ["medium", "Medium"], ["high", "High"]];
@@ -65,6 +66,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
         </label>
 
         <h3>Alerts</h3>
+        <NotificationsStep />
         <label>Handoff time
           <input type="time" value={prefs.handoffAt} onChange={(e) => setPrefs({ ...prefs, handoffAt: e.target.value })}
             onBlur={() => savePref("handoffAt", prefs.handoffAt)} />

@@ -157,3 +157,34 @@ function validateAlertPrefs(v: unknown): asserts v is Partial<AlertPrefs> {
     }
   }
 }
+
+export interface PushSubscriptionInput {
+  deviceId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+const B64URL_RE = /^[A-Za-z0-9_-]+={0,2}$/;
+
+export function validateDeviceId(deviceId: unknown): string {
+  if (typeof deviceId !== "string" || !ID_RE.test(deviceId)) throw new UserError("ValidationError", "bad device id");
+  return deviceId;
+}
+
+/** A browser PushSubscription as sent by the Enable step. The Notifier POSTs to `endpoint`, so it must be https. */
+export function validatePushSubscription(input: PushSubscriptionInput): PushSubscriptionInput {
+  const deviceId = validateDeviceId(input.deviceId);
+  const { endpoint, p256dh, auth } = input;
+  let url: URL | undefined;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    // falls through to the check below
+  }
+  if (url?.protocol !== "https:" || endpoint.length > 2048) throw new UserError("ValidationError", "bad push endpoint");
+  for (const [k, max] of [[p256dh, 200], [auth, 100]] as const) {
+    if (typeof k !== "string" || !B64URL_RE.test(k) || k.length > max) throw new UserError("ValidationError", "bad push key");
+  }
+  return { deviceId, endpoint, p256dh, auth };
+}

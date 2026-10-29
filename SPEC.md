@@ -210,7 +210,7 @@ PK = `HH#<householdId>` for everything (one household → one partition, fine at
 | Tag / tag group | `TAG#<id>`, `TGRP#<id>` |
 | Profile | `USER#<userId>` |
 | Saved view | `VIEW#<userId>#<id>` |
-| Push subscription | `PUSH#<userId>#<hash>` |
+| Push subscription | `PUSH#<userId>#<deviceId>`: `endpoint`, `p256dh`, `auth`, `createdAt`. `deviceId` is a random ID the app keeps in localStorage, so re-enabling on the same device overwrites the record and a second device adds one. Written by `putPushSubscription` (userId always from the caller's token), removed by `deletePushSubscription` or when the push service answers 404/410. Never in the snapshot or on the Profile, which the partner can read |
 | Notification state | `NSTATE#<itemId>#<userId>` (last alerted, avoids duplicate pushes) |
 
 GSI1 (`PK`, `updatedAt`) is written for a future delta sync; nothing queries it yet. Private items carry `visibility` and are
