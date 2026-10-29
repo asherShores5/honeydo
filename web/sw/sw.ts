@@ -1,8 +1,9 @@
-// Service worker: offline app shell now; push and notification actions plug in below (M4 tickets 03-06).
+// Service worker: offline app shell, push notifications, and opening the app on a tapped Ding.
 // Built by the `serviceWorker` plugin in vite.config.ts into a single classic script at /sw.js, so
 // it can import pure modules from src/ without becoming an ES-module worker.
 /// <reference lib="webworker" />
 import { routeRequest, shellCacheName, staleCaches } from "../src/swShell";
+import { clickPlan, notificationFor } from "../src/deepLink";
 
 declare const self: ServiceWorkerGlobalScope;
 /** Injected at build time: the build's content hash and the root paths to precache. */
@@ -65,10 +66,40 @@ async function precached(request: Request): Promise<Response> {
   return hit ?? fetch(request);
 }
 
-// ---- push (ticket 03/04/06) --------------------------------------------------
-// self.addEventListener("push", ...) goes here. Keep payload parsing in a pure module under src/.
+// ---- push (ticket 05; payloads from ticket 04/06) ----------------------------
+// Always show a notification, even for an empty or broken payload: iOS revokes the subscription
+// of a worker that receives a push and shows nothing. notificationFor never throws.
+self.addEventListener("push", (event) => {
+  let raw: string | undefined;
+  try {
+    raw = event.data?.text();
+  } catch {
+    raw = undefined;
+  }
+  const { title, options } = notificationFor(raw);
+  event.waitUntil(self.registration.showNotification(title, options));
+});
 
-// ---- notification actions (ticket 05) -----------------------------------------
-// self.addEventListener("notificationclick", ...) goes here: focus/open the deep link, or run "Mark done".
+// ---- notification tap (ticket 05) --------------------------------------------
+// iOS has no notification action buttons, so there is no "Mark done" here: a tap opens the app on
+// the item and Done is one tap away there, through the app's normal outbox.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(openFromNotification(event.notification.data));
+});
+
+async function openFromNotification(data: unknown): Promise<void> {
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const plan = clickPlan(data, windows, self.location.origin);
+  if ("open" in plan) {
+    await self.clients.openWindow(plan.open);
+    return;
+  }
+  const win = windows[plan.focus];
+  // Post first: focus() can reject on some browsers if the tap's activation has lapsed, and the
+  // app should still open the item when it next shows.
+  if (plan.message) win.postMessage(plan.message);
+  await win.focus().catch(() => undefined);
+}
 
 export {};

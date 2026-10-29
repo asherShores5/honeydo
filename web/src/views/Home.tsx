@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { schedule, status, urgency, type Item, type Status } from "@aubi/shared";
-import { completeItem, nameOf, saveProfile, undoCompletion, useStore, type Tag, type Who } from "../store";
+import { completeItem, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, span } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
 import { Settings } from "./Settings";
 import { finishedTasks } from "../finished";
+import { openItem } from "../openItem";
+import { consumePendingItem, usePendingItem } from "../openRequests";
+import { OpenedItem } from "./OpenedItem";
 
 type Tab = "ontrack" | "overdue" | "finished" | "activity";
 
@@ -47,6 +50,21 @@ export function Home() {
   const [editing, setEditing] = useState<Item | "new" | null>(null);
   const [settings, setSettings] = useState(false);
   const [undo, setUndo] = useState<{ itemId: string; at: number; title: string } | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+
+  // A tapped Ding asks to open its item (?item= on launch, or a worker message if already open).
+  const pendingItem = usePendingItem();
+  useEffect(() => {
+    if (!pendingItem) return;
+    consumePendingItem();
+    if (openItem(pendingItem, items, me.userId, Date.now())) {
+      setEditing(null);
+      setSettings(false);
+      setOpened(pendingItem);
+    } else {
+      toast("That item isn't here anymore.");
+    }
+  }, [pendingItem, items, me.userId]);
 
   // Remember the current filter as this profile's default view.
   const first = useRef(true);
@@ -186,6 +204,14 @@ export function Home() {
       )}
       {toastMsg && !undo && <div className="toast">{toastMsg}</div>}
 
+      {opened && (
+        <OpenedItem
+          itemId={opened}
+          onDone={(i) => (done(i), setOpened(null))}
+          onEdit={(i) => (setOpened(null), setEditing(i))}
+          onClose={() => setOpened(null)}
+        />
+      )}
       {editing && <Editor item={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
       {settings && <Settings onClose={() => setSettings(false)} />}
     </div>
