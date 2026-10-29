@@ -76,6 +76,9 @@ npx tsx scripts/create-users.ts us-west-1_ajihHnMAQ [--reset]     # passwords â†
 npx tsx scripts/seed.ts AubiHoney-TableCD117FA1-FQX5RGDOP8BN      # starter tags/chores
 ```
 
+The Web Push VAPID keys need no setup: the deploy creates them in SSM the first time and never
+replaces them.
+
 The DynamoDB table and user pool are deletion-protected with `RETAIN`; destroying the stack
 leaves them in place.
 
