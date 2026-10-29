@@ -15,7 +15,7 @@ import {
   validateNoteExpiry, validateNoteId, validateNoteInput, validateTaskId,
   type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
-import { PK, commentKey, ifConditionFailed, noteKey, pushKey } from "./table";
+import { PK, commentKey, handoffKey, ifConditionFailed, noteKey, pushKey } from "./table";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
@@ -104,13 +104,21 @@ function profileOut(rec: Record<string, unknown>) {
   if (p.alertPrefs) p.alertPrefs = readAlertPrefs(p.alertPrefs);
   // Own-only fields: the partner reads this Profile (snapshot, onProfileChange), so they are
   // always null here and only `me` fills them in (ownProfileOut).
-  p.activitySeenAt = null;
+  p.activitySeenAt = p.lastHandoffAt = p.lastHandoffSince = null;
   return p;
 }
 
-/** The caller's own Profile, with the fields only they may read. */
-function ownProfileOut(rec: Record<string, unknown>): Record<string, unknown> {
-  return { ...profileOut(rec), activitySeenAt: rec.activitySeenAt ?? null };
+/**
+ * The caller's own Profile, with the fields only they may read: Activity last seen, and their last
+ * Handoff (from its HANDOFF record) for the in-app card.
+ */
+function ownProfileOut(rec: Record<string, unknown>, handoff?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...profileOut(rec),
+    activitySeenAt: rec.activitySeenAt ?? null,
+    lastHandoffAt: handoff?.lastHandoffAt ?? null,
+    lastHandoffSince: handoff?.lastHandoffSince ?? null,
+  };
 }
 
 /**
@@ -191,13 +199,22 @@ function itemUpdate(itemId: string, set: Record<string, unknown>, remove: string
 
 // ---- resolvers -------------------------------------------------------------
 
-async function me(ctx: Ctx) {
+/** The caller's USER# record, created on first sight. */
+async function profileRecord(ctx: Ctx): Promise<Record<string, unknown>> {
   const key = { PK, SK: `USER#${ctx.userId}` };
   const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: key }));
-  if (r.Item) return ownProfileOut(r.Item);
+  if (r.Item) return r.Item;
   const rec = { ...key, userId: ctx.userId, username: ctx.username, setupComplete: false, updatedAt: Date.now() };
   await ddb.send(new PutCommand({ TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" })).catch(() => {});
-  return ownProfileOut(rec);
+  return rec;
+}
+
+async function me(ctx: Ctx) {
+  const [rec, handoff] = await Promise.all([
+    profileRecord(ctx),
+    ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: handoffKey(ctx.userId) } })).then((r) => r.Item),
+  ]);
+  return ownProfileOut(rec, handoff);
 }
 
 async function snapshot(ctx: Ctx) {
@@ -417,7 +434,7 @@ async function deleteTag(_ctx: Ctx, args: { id: string }) {
 }
 
 async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
-  const current = await me(ctx); // also ensures the record exists
+  const current = profileOut(await profileRecord(ctx)); // also ensures the record exists
   const fields = validateProfileInput(args.input);
   // Alert prefs patch the stored ones, so toggling one pref (e.g. overdue alerts off) keeps the
   // rest, the Handoff time included. Saving also rewrites a pre-M4 `digestAt` as `handoffAt`.
@@ -471,7 +488,7 @@ async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
  */
 async function markActivitySeen(ctx: Ctx, args: { at: number }) {
   const at = Math.min(validateActivitySeenAt(args.at), Date.now());
-  await me(ctx); // the Profile record exists
+  await profileRecord(ctx); // the Profile record exists
   const r = await ddb
     .send(
       new UpdateCommand({
@@ -484,7 +501,7 @@ async function markActivitySeen(ctx: Ctx, args: { at: number }) {
       }),
     )
     .then((r) => r.Attributes, ifConditionFailed(undefined));
-  return (r ?? (await me(ctx))).activitySeenAt;
+  return (r ?? (await profileRecord(ctx))).activitySeenAt;
 }
 
 // ---- Fridge Notes (m2/02) ---------------------------------------------------

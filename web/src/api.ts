@@ -13,7 +13,7 @@ const ITEM = `id kind title notes tags assigneeId visibility severity recurrence
 const TAG = `id name group color order deleted updatedAt`;
 const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs setupComplete updatedAt`;
 // Own-only fields: the server fills them on `me` only (null on any Profile the partner reads).
-const ME = `${PROFILE} activitySeenAt`;
+const ME = `${PROFILE} activitySeenAt lastHandoffAt lastHandoffSince`;
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
 const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
 // Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.

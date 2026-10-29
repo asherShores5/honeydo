@@ -212,7 +212,9 @@ async function handoffJobs(snap: Snapshot, now: number): Promise<PushJob[]> {
   return planned.map((p) => ({
     kind: "handoff",
     userId: p.userId,
-    claim: () => claimState(handoffKey(p.userId), "lastHandoffAt", p.seen, now, { userId: p.userId }),
+    // lastHandoffSince keeps the window this Handoff covered, so the in-app card (via `me`) can
+    // say exactly what the push said even when it ran late.
+    claim: () => claimState(handoffKey(p.userId), "lastHandoffAt", p.seen, now, { userId: p.userId, lastHandoffSince: p.content.since }),
     payload: handoffPayload(p.content),
     // Stale by the next morning; a newer Handoff replaces an undelivered one.
     options: { TTL: 12 * 3600, urgency: "normal", topic: "handoff" },

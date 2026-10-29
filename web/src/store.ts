@@ -21,8 +21,12 @@ export type Who = "anyone" | "mine" | "partner" | "unassigned";
 export interface Profile {
   userId: string; username: string; displayName?: string; color?: string; theme?: string; density?: string;
   defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsPatch | null;
+  // Own only (on `me`; the server sends them null elsewhere):
   /** When I last opened Activity (server ms). Read with `unreadActivity`. */
   activitySeenAt?: number | null;
+  /** When my last Handoff push was sent, and the start of the "done" window it covered. */
+  lastHandoffAt?: number | null;
+  lastHandoffSince?: number | null;
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
@@ -148,7 +152,7 @@ function applyTag(t: Tag) {
 }
 
 /** Fields only `me` carries; the server sends them null on any Profile the partner can also read. */
-const OWN_ONLY = ["activitySeenAt"] as const;
+const OWN_ONLY = ["activitySeenAt", "lastHandoffAt", "lastHandoffSince"] as const;
 
 function applyProfile(raw: any) {
   const p = profileIn(raw);

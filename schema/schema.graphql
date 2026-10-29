@@ -79,6 +79,10 @@ type Profile {
   alertPrefs: AWSJSON
   "Own only: when the Member last opened Activity (ms), set by markActivitySeen. Filled on `me`; null on any Profile the partner can read."
   activitySeenAt: Float
+  "Own only, on `me`: when my last Handoff push was sent (HANDOFF record). Null elsewhere."
+  lastHandoffAt: Float
+  "Own only, on `me`: the start of the Done window that push covered. Null elsewhere."
+  lastHandoffSince: Float
   setupComplete: Boolean!
   updatedAt: Float!
 }
