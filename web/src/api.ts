@@ -26,7 +26,7 @@ export const Q = {
   me: `query { me { ${ME} } }`,
   markActivitySeen: `mutation($at: Float!) { markActivitySeen(at: $at) }`,
   snapshot: `query { snapshot { items { ${ITEM} } tags { ${TAG} } profiles { ${PROFILE} }
-    feed { id at by type itemId title detail } notes { ${NOTE} } serverTime } }`,
+    feed { id at by type itemId title detail } fridgeNotes { ${NOTE} } serverTime } }`,
   completions: `query($itemId: ID!, $limit: Int) { completions(itemId: $itemId, limit: $limit) { itemId at by note } }`,
   putItem: `mutation($input: ItemInput!, $expectedVersion: Int) { putItem(input: $input, expectedVersion: $expectedVersion) { ${CHANGE} } }`,
   completeItem: `mutation($itemId: ID!, $at: Float, $note: String) { completeItem(itemId: $itemId, at: $at, note: $note) { ${CHANGE} } }`,

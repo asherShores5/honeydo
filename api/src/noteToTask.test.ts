@@ -29,7 +29,7 @@ describe("markNoteTasked", () => {
     const note = await h.call(h.B, "markNoteTasked", { id: "n1", taskId: "t1" });
     expect(note).toMatchObject({ id: "n1", text: "We're out of diapers", taskId: "t1", updatedAt: NOW + 2000 });
     expect(h.visibilityDeliveredTo(note, h.A)).toBe(true);
-    const { notes } = await h.call(h.A, "snapshot");
+    const { fridgeNotes: notes } = await h.call(h.A, "snapshot");
     expect(notes).toEqual([note]);
   });
 
@@ -76,7 +76,7 @@ describe("markNoteTasked with a Private Task", () => {
     await h.call(h.A, "putItem", { input: task("mine", { visibility: `private:${h.A.userId}` }) });
     const note = await h.call(h.A, "markNoteTasked", { id: "n1", taskId: "mine" });
     expect(note.taskId).toBeUndefined();
-    const { notes } = await h.call(h.B, "snapshot");
+    const { fridgeNotes: notes } = await h.call(h.B, "snapshot");
     expect(notes[0].taskId).toBeUndefined();
   });
 

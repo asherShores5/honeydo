@@ -1,9 +1,9 @@
 // Comments (M2) in the client: folding live and own addComment results into the store.
+import type { FeedEvent } from "./store";
 
 export interface Comment { id: string; itemId: string; at: number; by: string; text: string }
 /** The onCommentChange / addComment envelope. Delivery is already filtered by Visibility. */
 export interface CommentChange { comment: Comment }
-interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
 
 /** The slice of the store this module touches. `comments` holds lists for Items opened this session. */
 export interface CommentsState { comments: Record<string, Comment[]>; feed: FeedEvent[] }

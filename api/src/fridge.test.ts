@@ -19,7 +19,7 @@ describe("postNote", () => {
     expect(note).toMatchObject({ id: "n1", text: "Out of diapers", by: h.A.userId, at: NOW, pinned: false, visibility: "shared" });
     expect(h.visibilityDeliveredTo(note, h.B)).toBe(true);
     expect(h.visibilityDeliveredTo(note, h.A)).toBe(true);
-    const { notes } = await h.call(h.B, "snapshot");
+    const { fridgeNotes: notes } = await h.call(h.B, "snapshot");
     expect(notes).toEqual([note]);
   });
 
@@ -53,7 +53,7 @@ describe("postNote", () => {
   });
 });
 
-const fridgeIds = async (member = h.B) => (await h.call(member, "snapshot")).notes.map((n: any) => n.id);
+const fridgeIds = async (member = h.B) => (await h.call(member, "snapshot")).fridgeNotes.map((n: any) => n.id);
 
 describe("pinNote", () => {
   it("the partner can pin and unpin a Note, and the Fridge puts pinned Notes first", async () => {

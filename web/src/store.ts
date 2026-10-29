@@ -40,8 +40,8 @@ interface State {
   feed: FeedEvent[];
   /** Comments of Items opened this session, by Item ID. Not cached: the item screen reloads them. */
   comments: Record<string, Comment[]>;
-  /** Fridge Notes by id, expired ones included; show them through fridgeNotes(notes, now). */
-  notes: Record<string, Note>;
+  /** Fridge Notes by id, expired ones included; show them through the shared fridgeNotes(list, now). */
+  fridgeNotes: Record<string, Note>;
   online: boolean;
   live: boolean;
   outbox: Op[];
@@ -53,7 +53,7 @@ const OUTBOX = "aubi.outbox.v1";
 
 let state: State = {
   ready: false,
-  items: {}, tags: {}, profiles: {}, feed: [], notes: {}, comments: {},
+  items: {}, tags: {}, profiles: {}, feed: [], fridgeNotes: {}, comments: {},
   online: navigator.onLine, live: false,
   outbox: JSON.parse(localStorage.getItem(OUTBOX) ?? "[]"),
   ...JSON.parse(localStorage.getItem(CACHE) ?? "{}"),
@@ -63,9 +63,9 @@ const listeners = new Set<() => void>();
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
   if ("outbox" in patch) localStorage.setItem(OUTBOX, JSON.stringify(state.outbox));
-  if ("items" in patch || "tags" in patch || "profiles" in patch || "feed" in patch || "notes" in patch || "me" in patch) {
-    const { me, items, tags, profiles, feed, notes } = state;
-    localStorage.setItem(CACHE, JSON.stringify({ me, items, tags, profiles, feed, notes }));
+  if ("items" in patch || "tags" in patch || "profiles" in patch || "feed" in patch || "fridgeNotes" in patch || "me" in patch) {
+    const { me, items, tags, profiles, feed, fridgeNotes } = state;
+    localStorage.setItem(CACHE, JSON.stringify({ me, items, tags, profiles, feed, fridgeNotes }));
   }
   listeners.forEach((l) => l());
 }
@@ -175,7 +175,7 @@ export async function refresh(serverCopyOf?: string) {
       tags: Object.fromEntries(snapshot.tags.map((t: Tag) => [t.id, clean(t)])),
       profiles,
       feed: snapshot.feed.map(clean),
-      notes: Object.fromEntries(snapshot.notes.map((n: Note) => [n.id, clean(n)])),
+      fridgeNotes: Object.fromEntries(snapshot.fridgeNotes.map((n: Note) => [n.id, clean(n)])),
       online: true,
     });
   } catch (e) {
@@ -227,7 +227,7 @@ export async function start() {
 
 /** Drop everything held for the last Member, in memory too, so the next sign-in starts clean. */
 function reset() {
-  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], notes: {}, comments: {}, online: navigator.onLine, live: false, outbox: [] };
+  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], fridgeNotes: {}, comments: {}, online: navigator.onLine, live: false, outbox: [] };
   listeners.forEach((l) => l());
 }
 
@@ -414,14 +414,17 @@ export function nameOf(userId?: string) {
 /** Take a Note from the server or a live echo; an older copy never replaces a newer one. */
 function applyNote(raw: Note) {
   const n = clean(raw);
-  const cur = state.notes[n.id];
+  const cur = state.fridgeNotes[n.id];
   if (cur && cur.updatedAt > n.updatedAt) return;
-  set({ notes: { ...state.notes, [n.id]: n } });
+  set({ fridgeNotes: { ...state.fridgeNotes, [n.id]: n } });
 }
 
-async function sendNote(query: string, vars: object, undo: () => void) {
+type NoteMutation = "postNote" | "pinNote" | "setNoteExpiry";
+
+/** Run one Note mutation and take its result, read by the mutation's field name. */
+async function sendNote(field: NoteMutation, vars: object, undo: () => void) {
   try {
-    applyNote(Object.values(await gql(query, vars))[0] as Note);
+    applyNote((await gql<Record<NoteMutation, Note>>(Q[field], vars))[field]);
   } catch (e) {
     undo();
     toast(`Couldn't save the Note: ${(e as Error).message.replace(/^\w+Error: /, "")}`);
@@ -435,27 +438,27 @@ export function postNote(text: string, opts: { pinned?: boolean; expiresAt?: num
     id, text: text.trim(), by: state.me!.userId, at: now, pinned: !!opts.pinned, expiresAt: opts.expiresAt,
     visibility: "shared", updatedAt: now,
   };
-  set({ notes: { ...state.notes, [id]: note } });
-  return sendNote(Q.postNote, { id, text, pinned: !!opts.pinned, expiresAt: opts.expiresAt ?? null }, () => {
-    const { [id]: _gone, ...rest } = state.notes;
-    set({ notes: rest });
+  set({ fridgeNotes: { ...state.fridgeNotes, [id]: note } });
+  return sendNote("postNote", { id, text, pinned: !!opts.pinned, expiresAt: opts.expiresAt ?? null }, () => {
+    const { [id]: _gone, ...rest } = state.fridgeNotes;
+    set({ fridgeNotes: rest });
   });
 }
 
-function editNote(id: string, patch: Partial<Note>, query: string, vars: object) {
-  const cur = state.notes[id];
+function editNote(id: string, patch: Partial<Note>, field: NoteMutation, vars: object) {
+  const cur = state.fridgeNotes[id];
   if (!cur) return;
-  set({ notes: { ...state.notes, [id]: { ...cur, ...patch } } });
-  return sendNote(query, vars, () => set({ notes: { ...state.notes, [id]: cur } }));
+  set({ fridgeNotes: { ...state.fridgeNotes, [id]: { ...cur, ...patch } } });
+  return sendNote(field, vars, () => set({ fridgeNotes: { ...state.fridgeNotes, [id]: cur } }));
 }
 
 export function pinNote(id: string, pinned: boolean) {
-  return editNote(id, { pinned }, Q.pinNote, { id, pinned });
+  return editNote(id, { pinned }, "pinNote", { id, pinned });
 }
 
 /** `expiresAt` undefined clears the expiry. */
 export function setNoteExpiry(id: string, expiresAt: number | undefined) {
-  return editNote(id, { expiresAt }, Q.setNoteExpiry, { id, expiresAt: expiresAt ?? null });
+  return editNote(id, { expiresAt }, "setNoteExpiry", { id, expiresAt: expiresAt ?? null });
 }
 
 // ---- Note to Task (m2/03) ---------------------------------------------------
@@ -465,8 +468,8 @@ export function setNoteExpiry(id: string, expiresAt: number | undefined) {
  * putItem, so it works offline and the server always has the Task first.
  */
 export function markNoteTasked(noteId: string, taskId: string) {
-  const cur = state.notes[noteId];
+  const cur = state.fridgeNotes[noteId];
   if (!cur || cur.taskId) return;
-  set({ notes: { ...state.notes, [noteId]: { ...cur, taskId } } });
+  set({ fridgeNotes: { ...state.fridgeNotes, [noteId]: { ...cur, taskId } } });
   enqueue({ id: crypto.randomUUID(), type: "markNoteTasked", noteId, itemId: taskId });
 }

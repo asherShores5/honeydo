@@ -12,7 +12,7 @@ import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
 import { fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
   UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
-  validateNoteExpiry, validateNoteId, validateNoteInput, validateTaskId,
+  validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
   type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
 import { PK, commentKey, handoffKey, ifConditionFailed, noteKey, pushKey } from "./table";
@@ -150,19 +150,30 @@ async function getItemFor(ctx: Ctx, id: string) {
   return r.Item;
 }
 
+/** What an Activity event is about: an Item (itemSubject), or a Note for "posted" (no itemId). */
+interface ActivitySubject {
+  itemId?: string;
+  title: string;
+  visibility: string;
+}
+
+const itemSubject = (item: Record<string, unknown>): ActivitySubject => ({
+  itemId: item.id as string, title: item.title as string, visibility: item.visibility as string,
+});
+
 /** One Activity event record. `eventId` defaults to a random one; pass a deterministic one when the event mirrors a record. */
-function activityRecord(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string, eventId?: string) {
+function activityRecord(ctx: Ctx, type: string, subject: ActivitySubject, detail?: string, eventId?: string) {
   const at = Date.now();
   const id = eventId ?? `${at}-${Math.random().toString(36).slice(2, 8)}`;
   return {
     PK, SK: `FEED#${String(at).padStart(15, "0")}#${id}`, id, at, by: ctx.userId, type,
-    itemId: item.id, title: item.title, detail, visibility: item.visibility,
+    itemId: subject.itemId, title: subject.title, detail, visibility: subject.visibility,
     ttl: Math.floor(at / 1000) + FEED_TTL_S,
   };
 }
 
 async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string) {
-  await ddb.send(new PutCommand({ TableName: TABLE, Item: activityRecord(ctx, type, item, detail) }));
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: activityRecord(ctx, type, itemSubject(item), detail) }));
 }
 
 async function userIds(): Promise<string[]> {
@@ -233,7 +244,7 @@ async function snapshot(ctx: Ctx) {
     tags: tags.map((t) => strip(t)),
     profiles: profiles.map(profileOut),
     feed: feedRecs.map((f) => strip(f)),
-    notes,
+    fridgeNotes: notes,
     serverTime: Date.now(),
   };
 }
@@ -307,7 +318,7 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
               ConditionExpression: "attribute_not_exists(SK)",
             },
           },
-          { Put: { TableName: TABLE, Item: activityRecord(ctx, "completed", item, note, `done-${args.itemId}-${at}`) } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "completed", itemSubject(item), note, `done-${args.itemId}-${at}`) } },
         ],
       }),
     )
@@ -344,7 +355,7 @@ async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
               ConditionExpression: "attribute_exists(SK)",
             },
           },
-          { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", item) } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", itemSubject(item)) } },
         ],
       }),
     )
@@ -577,12 +588,12 @@ async function updateNote(ctx: Ctx, id: string, set: Record<string, unknown>, re
 }
 
 async function pinNote(ctx: Ctx, args: { id: string; pinned: boolean }) {
-  return updateNote(ctx, validateNoteId(args.id), { pinned: args.pinned === true });
+  return updateNote(ctx, validateId(args.id, "note"), { pinned: args.pinned === true });
 }
 
 /** Set or clear (null) a Note's expiry. */
 async function setNoteExpiry(ctx: Ctx, args: { id: string; expiresAt?: number | null }) {
-  const id = validateNoteId(args.id);
+  const id = validateId(args.id, "note");
   const expiresAt = validateNoteExpiry(args.expiresAt);
   return expiresAt === undefined
     ? updateNote(ctx, id, {}, ["expiresAt", "ttl"])
@@ -599,8 +610,8 @@ const FRIDGE_RESOLVERS = { postNote, pinNote, setNoteExpiry };
 // Task the Note stays unmarked, and that is not an error, so the queued op can't jam the outbox.
 
 async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
-  const id = validateNoteId(args.id);
-  const taskId = validateTaskId(args.taskId);
+  const id = validateId(args.id, "note");
+  const taskId = validateId(args.taskId, "task");
   const note = await getNote(ctx, id);
   const item = await getItemFor(ctx, taskId);
   if (item.kind !== "task") throw new UserError("ValidationError", "only a Task can come from a Note");
@@ -627,8 +638,6 @@ const NOTE_TO_TASK_RESOLVERS = { markNoteTasked };
 // written, and a Member sees it only if both that stamp and the Item's current Visibility allow
 // (story 36). An Item that goes Private takes its old Comments with it, and its shared ones come
 // back if it is shared again; a Comment written while Private stays with its writer for good.
-
-const COMMENT_MAX = 1000;
 
 function commentOut(rec: Record<string, unknown>) {
   const { id, itemId, at, by, text } = rec;
@@ -662,12 +671,10 @@ async function comments(ctx: Ctx, args: { itemId: string }) {
  * Item went Private. A replay publishes under the narrower of the stamp and the Item's Visibility now.
  */
 async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: string }) {
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(args.id ?? "")) throw new UserError("ValidationError", "bad comment id");
-  const text = (args.text ?? "").trim();
-  if (!text || text.length > COMMENT_MAX) throw new UserError("ValidationError", "comment must be 1-1000 characters");
-  const item = await getItemFor(ctx, args.itemId);
-  const key = { PK, SK: commentKey(args.itemId, args.id) };
-  const rec = { ...key, id: args.id, itemId: args.itemId, at: Date.now(), by: ctx.userId, text, visibility: item.visibility };
+  const { itemId, id, text } = validateCommentInput(args);
+  const item = await getItemFor(ctx, itemId);
+  const key = { PK, SK: commentKey(itemId, id) };
+  const rec = { ...key, id, itemId, at: Date.now(), by: ctx.userId, text, visibility: item.visibility };
   const written = await ddb
     .send(
       new TransactWriteCommand({
@@ -675,13 +682,13 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
           {
             ConditionCheck: {
               TableName: TABLE,
-              Key: { PK, SK: `ITEM#${args.itemId}` },
+              Key: { PK, SK: `ITEM#${itemId}` },
               ConditionExpression: "visibility = :vis",
               ExpressionAttributeValues: { ":vis": item.visibility },
             },
           },
           { Put: { TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" } },
-          { Put: { TableName: TABLE, Item: activityRecord(ctx, "commented", item, text, `comment-${args.id}`) } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "commented", itemSubject(item), text, `comment-${id}`) } },
         ],
       }),
     )
@@ -689,7 +696,7 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
   if (written) return { comment: commentOut(rec), visibility: item.visibility as string };
   // Either a replay (the Comment is there) or the Item's Visibility just changed: re-read both.
   const stored = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
-  const now = await getItemFor(ctx, args.itemId);
+  const now = await getItemFor(ctx, itemId);
   if (!stored) throw new UserError("ConflictError", "item changed, retry");
   if (stored.by !== ctx.userId) throw new UserError("ConflictError", "comment id taken");
   return { comment: commentOut(stored), visibility: narrower(commentStamp(stored), now.visibility as string) };

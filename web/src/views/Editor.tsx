@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
+import { COMMENT_MAX, DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
 import { addComment, loadComments, loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
 import { ago, newId, toLocalInput, when } from "../format";
 import { groupTags } from "../tags";
@@ -237,7 +237,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
               ))}
             </ul>
             <div className="row">
-              <input placeholder="Add a comment" value={draft} maxLength={1000} onChange={(e) => setDraft(e.target.value)}
+              <input placeholder="Add a comment" value={draft} maxLength={COMMENT_MAX} onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void postComment()} />
               <button disabled={posting || !draft.trim()} onClick={() => void postComment()}>Post</button>
             </div>

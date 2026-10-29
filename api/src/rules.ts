@@ -1,5 +1,5 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import { NOTE_MAX, SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
+import { COMMENT_MAX, NOTE_MAX, SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
 
 export { canSee } from "@aubi/shared";
 
@@ -191,6 +191,23 @@ export function validateActivitySeenAt(at: unknown): number {
   return at;
 }
 
+/**
+ * A client-picked record ID (Note, Comment) or a reference to an Item, shaped like an Item's ID.
+ * Client-picked IDs make an outbox replay or retry idempotent. `label` names it in the error.
+ */
+export function validateId(id: unknown, label: string): string {
+  if (typeof id !== "string" || !ID_RE.test(id)) throw new UserError("ValidationError", `bad ${label} id`);
+  return id;
+}
+
+// ---- Comments (M2) ----
+
+export function validateCommentInput(input: { itemId: unknown; id: unknown; text: unknown }) {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  if (!text || text.length > COMMENT_MAX) throw new UserError("ValidationError", `comment must be 1-${COMMENT_MAX} characters`);
+  return { itemId: validateId(input.itemId, "item"), id: validateId(input.id, "comment"), text };
+}
+
 // ---- Fridge Notes (m2/02) ----
 
 export interface NoteInput {
@@ -198,12 +215,6 @@ export interface NoteInput {
   text: string;
   pinned?: boolean | null;
   expiresAt?: number | null;
-}
-
-/** A Note's ID comes from the client (so an outbox replay is idempotent), shaped like an Item's. */
-export function validateNoteId(id: unknown): string {
-  if (typeof id !== "string" || !ID_RE.test(id)) throw new UserError("ValidationError", "bad note id");
-  return id;
 }
 
 /** Epoch ms, or null for never. A past expiry is allowed: it takes the Note off the Fridge. */
@@ -219,17 +230,9 @@ export function validateNoteInput(input: NoteInput) {
   const text = typeof input.text === "string" ? input.text.trim() : "";
   if (!text || text.length > NOTE_MAX) throw new UserError("ValidationError", `note must be 1-${NOTE_MAX} characters`);
   return {
-    id: validateNoteId(input.id),
+    id: validateId(input.id, "note"),
     text,
     pinned: input.pinned === true,
     expiresAt: validateNoteExpiry(input.expiresAt),
   };
-}
-
-// ---- Note to Task (m2/03) ----
-
-/** The Task a Note was turned into: an Item ID. */
-export function validateTaskId(id: unknown): string {
-  if (typeof id !== "string" || !ID_RE.test(id)) throw new UserError("ValidationError", "bad task id");
-  return id;
 }
