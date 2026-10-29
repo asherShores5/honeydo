@@ -2,18 +2,45 @@ import { describe, expect, it } from "vitest";
 import { DAY, HOUR, fromWall, toWall } from "./time";
 import { defaultWarnWindow, schedule, status } from "./status";
 import { DEFAULT_ALERT_PREFS, alertRecipients, dingSlotsForDay, shouldDing } from "./alerts";
-import type { Item } from "./types";
+import type { Chore, Item, Task } from "./types";
 
 const T0 = fromWall(2026, 10, 1, 12, 0);
 
-function chore(over: Partial<Item> = {}): Item {
-  return {
-    id: "i1", kind: "chore", title: "Baby bath", tags: [], visibility: "shared",
-    archived: false, createdBy: "a", createdAt: T0 - 30 * DAY, updatedAt: T0, version: 1,
-    recurrence: { type: "interval", every: 3, unit: "days" },
-    ...over,
-  };
+const BASE = {
+  id: "i1", title: "Baby bath", visibility: "shared",
+  archived: false, createdBy: "a", createdAt: T0 - 30 * DAY, updatedAt: T0, version: 1,
+} as const;
+
+function chore(over: Partial<Omit<Chore, "kind">> = {}): Chore {
+  return { ...BASE, tags: [], kind: "chore", recurrence: { type: "interval", every: 3, unit: "days" }, ...over };
 }
+
+function task(over: Partial<Omit<Task, "kind">> = {}): Task {
+  return { ...BASE, tags: [], kind: "task", title: "Call plumber", ...over };
+}
+
+describe("item shape", () => {
+  it("a Chore can't exist without a Recurrence, and a Task can't carry one", () => {
+    // @ts-expect-error a Chore must have a Recurrence
+    const noRec: Item = { ...BASE, tags: [], kind: "chore" };
+    // @ts-expect-error a Task can't have a Recurrence
+    const taskRec: Item = { ...BASE, tags: [], kind: "task", recurrence: { type: "interval", every: 1, unit: "days" } };
+    expect([noRec.kind, taskRec.kind]).toEqual(["chore", "task"]);
+  });
+});
+
+describe("Done on a Chore always Resets", () => {
+  const recs = [
+    { type: "interval", every: 3, unit: "days" },
+    { type: "calendar", freq: "weekly", byWeekday: [2], at: "20:00" },
+    { type: "calendar", freq: "monthly", byMonthDay: [1], at: "09:00" },
+  ] as const;
+  for (const recurrence of recs) {
+    it(`${JSON.stringify(recurrence)} is green, not done, right after Done`, () => {
+      expect(status(chore({ recurrence, lastDoneAt: T0 }), T0 + 1000)).toBe("green");
+    });
+  }
+});
 
 describe("time", () => {
   it("round-trips Pacific wall clock across DST", () => {
@@ -65,11 +92,11 @@ describe("calendar chores (trash weekly Tue 20:00)", () => {
 });
 
 describe("tasks", () => {
-  const task = chore({ kind: "task", recurrence: undefined, dueAt: T0 + 2 * DAY });
-  it("yellow 1 day before due", () => expect(status(task, T0 + DAY + HOUR)).toBe("yellow"));
-  it("done once completed", () => expect(status({ ...task, lastDoneAt: T0 }, T0 + 5 * DAY)).toBe("done"));
+  const t = task({ dueAt: T0 + 2 * DAY });
+  it("yellow 1 day before due", () => expect(status(t, T0 + DAY + HOUR)).toBe("yellow"));
+  it("done once completed", () => expect(status({ ...t, lastDoneAt: T0 }, T0 + 5 * DAY)).toBe("done"));
   it("undated tasks stay green", () =>
-    expect(status({ ...task, dueAt: undefined }, T0 + 100 * DAY)).toBe("green"));
+    expect(status({ ...t, dueAt: undefined }, T0 + 100 * DAY)).toBe("green"));
 });
 
 describe("overdue dings", () => {

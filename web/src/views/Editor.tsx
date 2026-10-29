@@ -39,35 +39,34 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
     if (item) loadCompletions(item.id).then(setHistory, () => setHistory([]));
   }, [item, live?.lastDoneAt]);
 
-  function recurrence(): Recurrence | undefined {
-    if (mode === "interval") return { type: "interval", every: Math.max(1, Math.round(every)), unit };
-    if (mode === "weekly") return { type: "calendar", freq: "weekly", byWeekday: [...weekdays].sort(), at };
-    if (mode === "monthly") {
-      const days = monthDays.split(/[ ,]+/).map(Number).filter((d) => d >= 1 && d <= 31);
-      return { type: "calendar", freq: "monthly", byMonthDay: days.length ? days : [1], at };
-    }
-    return undefined;
+  function recurrence(m: Exclude<Mode, "once">): Recurrence {
+    if (m === "interval") return { type: "interval", every: Math.max(1, Math.round(every)), unit };
+    if (m === "weekly") return { type: "calendar", freq: "weekly", byWeekday: [...weekdays].sort(), at };
+    const days = monthDays.split(/[ ,]+/).map(Number).filter((d) => d >= 1 && d <= 31);
+    return { type: "calendar", freq: "monthly", byMonthDay: days.length ? days : [1], at };
   }
 
   const valid = title.trim() && (mode !== "weekly" || weekdays.length > 0);
 
   function save() {
     const id = item?.id ?? newId();
-    saveItem({
+    const common = {
       id,
-      kind: mode === "once" ? "task" : "chore",
       title: title.trim(),
       notes: notes.trim() || undefined,
       tags: [...selTags],
       assigneeId: assignee || undefined,
-      visibility: isPrivate ? `private:${me.userId}` : "shared",
+      visibility: (isPrivate ? `private:${me.userId}` : "shared") as Item["visibility"],
       severity: severity || undefined,
-      recurrence: recurrence(),
-      dueAt: mode === "once" ? fromLocalInput(dueAt) : undefined,
       warnWindow: item?.warnWindow,
       snoozedUntil: item?.snoozedUntil,
       archived: item?.archived ?? false,
-    });
+    };
+    saveItem(
+      mode === "once"
+        ? { ...common, kind: "task", recurrence: undefined, dueAt: fromLocalInput(dueAt) }
+        : { ...common, kind: "chore", recurrence: recurrence(mode), dueAt: undefined },
+    );
     // New chores can start from "last done": otherwise they're due immediately.
     const ld = fromLocalInput(lastDone);
     if (!item && ld && mode !== "once") completeItem(id, ld);

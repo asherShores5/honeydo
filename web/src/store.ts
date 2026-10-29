@@ -1,6 +1,6 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { Item } from "@aubi/shared";
+import type { Chore, Item, Task } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
@@ -14,7 +14,9 @@ export interface Profile {
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
 
-export type ItemInput = Pick<Item, "id" | "kind" | "title" | "notes" | "tags" | "assigneeId" | "visibility" | "severity" | "recurrence" | "dueAt" | "warnWindow" | "snoozedUntil" | "archived">;
+type InputKey = "id" | "kind" | "title" | "notes" | "tags" | "assigneeId" | "visibility" | "severity" | "recurrence" | "dueAt" | "warnWindow" | "snoozedUntil" | "archived";
+/** Per kind, so a Chore input can't drop its Recurrence. */
+export type ItemInput = Pick<Chore, InputKey> | Pick<Task, InputKey>;
 
 type Op =
   | { id: string; type: "putItem"; input: ItemInput; expectedVersion?: number; changed: (keyof ItemInput)[] }
@@ -230,8 +232,11 @@ function enqueue(op: Op) {
 }
 
 export function toInput(i: Item): ItemInput {
-  const { id, kind, title, notes, tags, assigneeId, visibility, severity, recurrence, dueAt, warnWindow, snoozedUntil, archived } = i;
-  return { id, kind, title, notes, tags, assigneeId, visibility, severity, recurrence, dueAt, warnWindow, snoozedUntil, archived };
+  const { id, title, notes, tags, assigneeId, visibility, severity, warnWindow, snoozedUntil, archived } = i;
+  const base = { id, title, notes, tags, assigneeId, visibility, severity, warnWindow, snoozedUntil, archived };
+  return i.kind === "chore"
+    ? { ...base, kind: "chore", recurrence: i.recurrence, dueAt: undefined }
+    : { ...base, kind: "task", recurrence: undefined, dueAt: i.dueAt };
 }
 
 // ---- actions (optimistic) ---------------------------------------------------
