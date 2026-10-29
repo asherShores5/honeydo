@@ -1,7 +1,9 @@
 // Outbox op types and the pure merge of a server snapshot with pending ops.
-import type { Item } from "@aubi/shared";
+import type { Chore, Task } from "@aubi/shared";
 
-export type ItemInput = Pick<Item, "id" | "kind" | "title" | "notes" | "tags" | "assigneeId" | "visibility" | "severity" | "recurrence" | "dueAt" | "warnWindow" | "snoozedUntil" | "archived">;
+type InputKey = "id" | "kind" | "title" | "notes" | "tags" | "assigneeId" | "visibility" | "severity" | "recurrence" | "dueAt" | "warnWindow" | "snoozedUntil" | "archived";
+/** Per kind, so a Chore input can't drop its Recurrence. */
+export type ItemInput = Pick<Chore, InputKey> | Pick<Task, InputKey>;
 
 export type Op =
   | { id: string; type: "putItem"; input: ItemInput; expectedVersion?: number; changed: (keyof ItemInput)[] }
