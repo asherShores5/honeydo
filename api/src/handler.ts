@@ -16,9 +16,16 @@ const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean)
 const PK = "HH#aubi";
 const FEED_TTL_S = 365 * 24 * 3600;
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+type DocClient = Pick<DynamoDBDocumentClient, "send">;
+
+let ddb: DocClient = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
 });
+
+/** Test seam: swap the document client (see src/testing/harness.ts). Production never calls this. */
+export function setDocClient(client: DocClient) {
+  ddb = client;
+}
 
 interface Ctx {
   userId: string;
