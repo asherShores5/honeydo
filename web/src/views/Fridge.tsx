@@ -23,7 +23,7 @@ const expiryAt = (choice: string, now: number) => {
  * `now` passes their expiry. `onMakeTask` is the hook for turning a Note into a Task (m2/03):
  * when it's given, each Note shows a "Make Task" button.
  */
-export function Fridge({ now, onMakeTask }: { now: number; onMakeTask?: (note: Note) => void }) {
+export function Fridge({ now, onMakeTask, onOpenTask }: { now: number; onMakeTask?: (note: Note) => void; onOpenTask?: (taskId: string) => void }) {
   const notes = useStore((s) => s.notes);
   const shown = fridgeNotes(notes, now);
   const [text, setText] = useState("");
@@ -60,13 +60,15 @@ export function Fridge({ now, onMakeTask }: { now: number; onMakeTask?: (note: N
 
       <ul className="notes">
         {shown.length === 0 && <li className="empty">The Fridge is empty.</li>}
-        {shown.map((n) => <NoteCard key={n.id} note={n} now={now} onMakeTask={onMakeTask} />)}
+        {shown.map((n) => <NoteCard key={n.id} note={n} now={now} onMakeTask={onMakeTask} onOpenTask={onOpenTask} />)}
       </ul>
     </div>
   );
 }
 
-function NoteCard({ note, now, onMakeTask }: { note: Note; now: number; onMakeTask?: (note: Note) => void }) {
+function NoteCard({ note, now, onMakeTask, onOpenTask }: {
+  note: Note; now: number; onMakeTask?: (note: Note) => void; onOpenTask?: (taskId: string) => void;
+}) {
   return (
     <li className={`note ${note.pinned ? "pinned" : ""}`}>
       <p className="text">{note.pinned && <span aria-label="Pinned">📌 </span>}{note.text}</p>
@@ -84,8 +86,10 @@ function NoteCard({ note, now, onMakeTask }: { note: Note; now: number; onMakeTa
           <option value="" disabled>{note.expiresAt === undefined ? "Set expiry…" : "Change expiry…"}</option>
           {EXPIRY.map((x) => <option key={x.label}>{x.label}</option>)}
         </select>
-        {/* m2/03: Note → Task. Home passes onMakeTask once that ticket lands. */}
-        {onMakeTask && <button className="link" onClick={() => onMakeTask(note)}>Make Task</button>}
+        {/* m2/03: a Note turned into a Task stays here and links to it; otherwise it offers Make Task. */}
+        {note.taskId
+          ? <button className="link" onClick={() => onOpenTask?.(note.taskId!)}>✓ Made into a Task</button>
+          : onMakeTask && <button className="link" onClick={() => onMakeTask(note)}>Make Task</button>}
       </div>
     </li>
   );

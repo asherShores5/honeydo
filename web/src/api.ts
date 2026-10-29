@@ -15,7 +15,7 @@ const PROFILE = `userId username displayName color theme density defaultView sav
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
 const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
 // Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.
-const NOTE = `id text by at pinned expiresAt visibility updatedAt`;
+const NOTE = `id text by at pinned expiresAt visibility updatedAt taskId`;
 
 export const Q = {
   me: `query { me { ${PROFILE} } }`,
@@ -40,6 +40,8 @@ export const Q = {
   pinNote: `mutation($id: ID!, $pinned: Boolean!) { pinNote(id: $id, pinned: $pinned) { ${NOTE} } }`,
   setNoteExpiry: `mutation($id: ID!, $expiresAt: Float) { setNoteExpiry(id: $id, expiresAt: $expiresAt) { ${NOTE} } }`,
   onNoteChange: `subscription { onNoteChange { ${NOTE} } }`,
+  // ---- Note to Task (m2/03) ----
+  markNoteTasked: `mutation($id: ID!, $taskId: ID!) { markNoteTasked(id: $id, taskId: $taskId) { ${NOTE} } }`,
 };
 
 /** One call may take this long before it counts as offline, so a weak bar can't hang the app. */

@@ -223,3 +223,11 @@ export function validateNoteInput(input: NoteInput) {
     expiresAt: validateNoteExpiry(input.expiresAt),
   };
 }
+
+// ---- Note to Task (m2/03) ----
+
+/** The Task a Note was turned into: an Item ID. */
+export function validateTaskId(id: unknown): string {
+  if (typeof id !== "string" || !ID_RE.test(id)) throw new UserError("ValidationError", "bad task id");
+  return id;
+}

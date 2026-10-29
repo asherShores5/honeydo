@@ -201,6 +201,9 @@ export function response(ctx) {
 }`),
     });
 
+    // ---- Note to Task (m2/03) ---- Fans out through SubNotes like the other Note mutations.
+    ds.createResolver("MmarkNoteTasked", { typeName: "Mutation", fieldName: "markNoteTasked" });
+
     // ---- notifier (M4) ----
     // The Notifier Lambda runs as this role. It and the key-provisioning function (VapidKeysFn,
     // below) are the only principals granted the VAPID private key; the API Lambda gets no SSM access.

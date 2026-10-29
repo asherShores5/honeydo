@@ -11,6 +11,9 @@ import { consumePendingItem, usePendingItem } from "../openRequests";
 import { OpenedItem } from "./OpenedItem";
 import { HandoffCard } from "./HandoffCard";
 import { Fridge } from "./Fridge";
+import type { Note } from "@aubi/shared";
+import { markNoteTasked } from "../store";
+import { taskDraft } from "../noteToTask";
 
 type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge";
 
@@ -53,6 +56,12 @@ export function Home() {
   const [settings, setSettings] = useState(false);
   const [undo, setUndo] = useState<{ itemId: string; at: number; title: string } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
+  // m2/03: "Make Task" on a Note opens the Editor pre-filled; a Note's Task opens like a Ding's item.
+  const [fromNote, setFromNote] = useState<Note | null>(null);
+  function openTask(taskId: string) {
+    if (openItem(taskId, items, me.userId, Date.now())) setOpened(taskId);
+    else toast("That Task isn't here anymore.");
+  }
 
   // A tapped Ding asks to open its item (?item= on launch, or a worker message if already open).
   const pendingItem = usePendingItem();
@@ -172,7 +181,7 @@ export function Home() {
 
       <main>
         {tab === "fridge" ? (
-          <Fridge now={now} />
+          <Fridge now={now} onMakeTask={setFromNote} onOpenTask={openTask} />
         ) : tab === "activity" ? (
           <ul className="feed">
             {feed.length === 0 && <li className="empty">Nothing yet.</li>}
@@ -228,6 +237,13 @@ export function Home() {
         />
       )}
       {editing && <Editor item={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
+      {fromNote && (
+        <Editor
+          draft={taskDraft(fromNote)}
+          onSaved={(s) => s.kind === "task" && markNoteTasked(fromNote.id, s.id)}
+          onClose={() => setFromNote(null)}
+        />
+      )}
       {settings && <Settings onClose={() => setSettings(false)} />}
     </div>
   );
