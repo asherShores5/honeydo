@@ -9,6 +9,8 @@ export const pushKey = (userId: string, deviceId: string) => `PUSH#${userId}#${d
 export const nstateKey = (itemId: string, userId: string) => `NSTATE#${itemId}#${userId}`;
 /** When one Member's last Handoff was sent. */
 export const handoffKey = (userId: string) => `HANDOFF#${userId}`;
+/** One Note on the Fridge (m2/02). */
+export const noteKey = (noteId: string) => `NOTE#${noteId}`;
 
 /**
  * Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`, and so does a

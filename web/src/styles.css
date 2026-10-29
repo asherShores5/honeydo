@@ -110,3 +110,17 @@ ul { list-style: none; margin: 0; padding: 0; }
 .actions button { flex: 1; }
 .history li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .history li .link { margin-left: auto; color: var(--red); font-size: 13px; }
+
+/* ---- Fridge Notes (m2/02) ---- */
+.note-new { margin-bottom: 16px; }
+.note-new textarea { min-height: 64px; resize: vertical; }
+.note-new .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.note-new .row .check { margin: 0; }
+.note-new .row select { flex: 1; }
+.notes { list-style: none; margin: 0; padding: 0; }
+.note { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 10px; }
+.note.pinned { border-color: var(--yellow); }
+.note .text { margin: 0 0 4px; white-space: pre-wrap; }
+.note .meta { margin: 0; font-size: 13px; color: var(--muted); }
+.note-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.note-actions select { width: auto; padding: 4px 8px; font-size: 13px; }

@@ -10,8 +10,9 @@ import { openItem } from "../openItem";
 import { consumePendingItem, usePendingItem } from "../openRequests";
 import { OpenedItem } from "./OpenedItem";
 import { HandoffCard } from "./HandoffCard";
+import { Fridge } from "./Fridge";
 
-type Tab = "ontrack" | "overdue" | "finished" | "activity";
+type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge";
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -136,6 +137,7 @@ export function Home() {
         <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
           Activity{unread > 0 && <b className="unread" aria-label={`${unread} unread`}>{unread > 99 ? "99+" : unread}</b>}
         </button>
+        <button className={tab === "fridge" ? "on" : ""} onClick={() => setTab("fridge")}>Fridge</button>
       </nav>
 
       {(tab === "ontrack" || tab === "overdue") && (
@@ -169,7 +171,9 @@ export function Home() {
       )}
 
       <main>
-        {tab === "activity" ? (
+        {tab === "fridge" ? (
+          <Fridge now={now} />
+        ) : tab === "activity" ? (
           <ul className="feed">
             {feed.length === 0 && <li className="empty">Nothing yet.</li>}
             {feed.map((e) => (

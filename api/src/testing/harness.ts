@@ -59,6 +59,14 @@ export function deliveredTo(change: { visibility: string; removedFor?: string[] 
   );
 }
 
+/**
+ * Whether an onNoteChange subscriber receives this Note (m2/02). Mirrors the "SubNotes" filter in
+ * infra/lib/stacks.ts: visibility in ["shared", "private:<sub>"]. Keep the two in step.
+ */
+export function noteDeliveredTo(note: { visibility: string }, member: Member) {
+  return ["shared", `private:${member.userId}`].includes(note.visibility);
+}
+
 export function harness() {
   return {
     A: memberA,

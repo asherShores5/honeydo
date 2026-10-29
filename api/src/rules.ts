@@ -1,5 +1,5 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import { SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
+import { NOTE_MAX, SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
 
 export { canSee } from "@aubi/shared";
 
@@ -187,4 +187,39 @@ export function validatePushSubscription(input: PushSubscriptionInput): PushSubs
     if (typeof k !== "string" || !B64URL_RE.test(k) || k.length > max) throw new UserError("ValidationError", "bad push key");
   }
   return { deviceId, endpoint, p256dh, auth };
+}
+
+// ---- Fridge Notes (m2/02) ----
+
+export interface NoteInput {
+  id: string;
+  text: string;
+  pinned?: boolean | null;
+  expiresAt?: number | null;
+}
+
+/** A Note's ID comes from the client (so an outbox replay is idempotent), shaped like an Item's. */
+export function validateNoteId(id: unknown): string {
+  if (typeof id !== "string" || !ID_RE.test(id)) throw new UserError("ValidationError", "bad note id");
+  return id;
+}
+
+/** Epoch ms, or null for never. A past expiry is allowed: it takes the Note off the Fridge. */
+export function validateNoteExpiry(expiresAt: unknown): number | undefined {
+  if (expiresAt == null) return undefined;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+    throw new UserError("ValidationError", "bad expiresAt");
+  }
+  return Math.round(expiresAt);
+}
+
+export function validateNoteInput(input: NoteInput) {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  if (!text || text.length > NOTE_MAX) throw new UserError("ValidationError", `note must be 1-${NOTE_MAX} characters`);
+  return {
+    id: validateNoteId(input.id),
+    text,
+    pinned: input.pinned === true,
+    expiresAt: validateNoteExpiry(input.expiresAt),
+  };
 }
