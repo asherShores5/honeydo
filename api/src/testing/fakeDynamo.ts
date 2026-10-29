@@ -1,7 +1,7 @@
 // In-memory stand-in for the DynamoDB document client, covering only what handler.ts uses.
 // Unsupported expressions throw, so a new resolver that needs more fails loudly instead of
 // passing by accident. Extend the small parsers below when that happens.
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 type Rec = Record<string, unknown>;
 type Names = Record<string, string> | undefined;
@@ -9,6 +9,13 @@ type Values = Record<string, unknown> | undefined;
 
 export class ConditionalCheckFailedException extends Error {
   name = "ConditionalCheckFailedException";
+}
+
+export class TransactionCanceledException extends Error {
+  name = "TransactionCanceledException";
+  constructor(public CancellationReasons: { Code: string }[]) {
+    super(`Transaction cancelled [${CancellationReasons.map((r) => r.Code).join(", ")}]`);
+  }
 }
 
 const keyOf = (k: Rec) => `${k.PK}\u0000${k.SK}`;
@@ -44,8 +51,9 @@ function operand(token: string, rec: Rec | undefined, names: Names, values: Valu
 
 function compare(a: unknown, op: string, b: unknown) {
   if (op === "=") return a === b;
-  if (op === "<>") return a !== b;
+  // Like DynamoDB, any comparison with a missing attribute is false, `<>` included.
   if (a === undefined || b === undefined) return false;
+  if (op === "<>") return a !== b;
   const [x, y] = [a as number | string, b as number | string];
   return op === "<" ? x < y : op === "<=" ? x <= y : op === ">" ? x > y : x >= y;
 }
@@ -112,6 +120,7 @@ export class FakeDocClient {
   }
 
   async send(cmd: unknown): Promise<any> {
+    if (cmd instanceof TransactWriteCommand) return this.transactWrite(cmd.input);
     if (cmd instanceof GetCommand) {
       const r = this.table.get(keyOf(cmd.input.Key!));
       return { Item: r && structuredClone(r) };
@@ -144,6 +153,31 @@ export class FakeDocClient {
     }
     if (cmd instanceof QueryCommand) return this.query(cmd.input);
     return unsupported("command", (cmd as object)?.constructor?.name ?? String(cmd));
+  }
+
+  /**
+   * All-or-nothing Put/Delete like DynamoDB: if any condition fails, nothing is written and a
+   * TransactionCanceledException carries one CancellationReason per action, in order.
+   */
+  private transactWrite(input: TransactWriteCommand["input"]) {
+    const actions = (input.TransactItems ?? []).map((t) => {
+      if (t.Put) return { key: keyOf(t.Put.Item!), item: t.Put.Item as Rec, ...t.Put };
+      if (t.Delete) return { key: keyOf(t.Delete.Key!), item: undefined, ...t.Delete };
+      return unsupported("transaction action", Object.keys(t).join(","));
+    });
+    if (new Set(actions.map((a) => a.key)).size !== actions.length) unsupported("transaction", "two actions on one item");
+    const reasons = actions.map((a) =>
+      !a.ConditionExpression ||
+      evalCondition(a.ConditionExpression, this.table.get(a.key), a.ExpressionAttributeNames, a.ExpressionAttributeValues)
+        ? { Code: "None" }
+        : { Code: "ConditionalCheckFailed" },
+    );
+    if (reasons.some((r) => r.Code !== "None")) throw new TransactionCanceledException(reasons);
+    for (const a of actions) {
+      if (a.item) this.table.set(a.key, clean(a.item));
+      else this.table.delete(a.key);
+    }
+    return {};
   }
 
   private query(input: QueryCommand["input"]) {
