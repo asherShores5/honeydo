@@ -16,6 +16,8 @@ export interface Note {
   expiresAt?: number;
   visibility: "shared";
   updatedAt: number;
+  /** The Task this Note was turned into (m2/03). Absent = not turned into a Task. */
+  taskId?: string;
 }
 
 /** Longest Note text, after trimming. */

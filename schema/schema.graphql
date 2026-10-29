@@ -161,6 +161,8 @@ type Note {
   "Always shared; carried so the subscription filter matches Items'."
   visibility: String!
   updatedAt: Float!
+  "The Task this Note was turned into (m2/03). Null = not turned into a Task."
+  taskId: ID
 }
 
 type Query {
@@ -190,6 +192,8 @@ type Mutation {
   pinNote(id: ID!, pinned: Boolean!): Note!
   "Set the Note's expiry, or clear it with null."
   setNoteExpiry(id: ID!, expiresAt: Float): Note!
+  "Mark the Note as turned into this Task (m2/03). The first Task wins; later calls return the Note as is."
+  markNoteTasked(id: ID!, taskId: ID!): Note!
 }
 
 type Subscription {
@@ -197,5 +201,5 @@ type Subscription {
   onTagChange: Tag @aws_subscribe(mutations: ["putTag", "deleteTag"])
   onProfileChange: Profile @aws_subscribe(mutations: ["putProfile"])
   onCommentChange: CommentChange @aws_subscribe(mutations: ["addComment"])
-  onNoteChange: Note @aws_subscribe(mutations: ["postNote", "pinNote", "setNoteExpiry"])
+  onNoteChange: Note @aws_subscribe(mutations: ["postNote", "pinNote", "setNoteExpiry", "markNoteTasked"])
 }

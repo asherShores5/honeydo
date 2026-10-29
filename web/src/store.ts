@@ -234,7 +234,7 @@ export function stop() {
 
 let flushing = false;
 
-async function send(op: Op) {
+async function send(op: Exclude<Op, { type: "markNoteTasked" }>) {
   if (op.type === "putItem") {
     // flush runs after a refresh on resume, so state.tags reflects Tags deleted while offline.
     const input = {
@@ -255,8 +255,8 @@ export async function flush() {
     while (state.outbox.length) {
       const op = state.outbox[0];
       try {
-        const change = await send(op);
-        applyItem(change, true);
+        if (op.type === "markNoteTasked") applyNote((await gql(Q.markNoteTasked, { id: op.noteId, taskId: op.itemId })).markNoteTasked);
+        else applyItem(await send(op), true);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         if (e.kind === "network") {
@@ -447,4 +447,17 @@ export function pinNote(id: string, pinned: boolean) {
 /** `expiresAt` undefined clears the expiry. */
 export function setNoteExpiry(id: string, expiresAt: number | undefined) {
   return editNote(id, { expiresAt }, Q.setNoteExpiry, { id, expiresAt: expiresAt ?? null });
+}
+
+// ---- Note to Task (m2/03) ---------------------------------------------------
+
+/**
+ * Mark a Note as turned into the Task just saved. It goes through the outbox behind that Task's
+ * putItem, so it works offline and the server always has the Task first.
+ */
+export function markNoteTasked(noteId: string, taskId: string) {
+  const cur = state.notes[noteId];
+  if (!cur || cur.taskId) return;
+  set({ notes: { ...state.notes, [noteId]: { ...cur, taskId } } });
+  enqueue({ id: crypto.randomUUID(), type: "markNoteTasked", noteId, itemId: taskId });
 }

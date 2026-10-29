@@ -18,6 +18,7 @@ import { PK, commentKey, ifConditionFailed, pushKey } from "./table";
 import { fridgeNotes, type Note } from "@aubi/shared";
 import { validateNoteExpiry, validateNoteId, validateNoteInput, type NoteInput } from "./rules";
 import { noteKey } from "./table";
+import { validateTaskId } from "./rules";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
@@ -551,6 +552,35 @@ async function setNoteExpiry(ctx: Ctx, args: { id: string; expiresAt?: number | 
 
 const FRIDGE_RESOLVERS = { postNote, pinNote, setNoteExpiry };
 
+// ---- Note to Task (m2/03) ---------------------------------------------------
+// "Make Task" keeps the Note on the Fridge and marks it with the Task it became (taskId). The Task
+// is a normal putItem, so its "created" entry is what Activity shows. The first Task wins: a
+// replay, or a second Task for the same Note, leaves the Note as it is.
+
+async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
+  const id = validateNoteId(args.id);
+  const taskId = validateTaskId(args.taskId);
+  const note = await getNote(ctx, id);
+  const item = await getItemFor(ctx, taskId);
+  if (item.kind !== "task") throw new UserError("ValidationError", "only a Task can come from a Note");
+  if (note.taskId !== undefined) return note;
+  const marked = await ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK, SK: noteKey(id) },
+        UpdateExpression: "SET taskId = :taskId, updatedAt = :now",
+        ConditionExpression: "attribute_exists(SK) AND attribute_not_exists(taskId)",
+        ExpressionAttributeValues: { ":taskId": taskId, ":now": Date.now() },
+        ReturnValues: "ALL_NEW",
+      }),
+    )
+    .then((r) => r.Attributes, ifConditionFailed(undefined));
+  return marked ? noteOut(marked) : getNote(ctx, id);
+}
+
+const NOTE_TO_TASK_RESOLVERS = { markNoteTasked };
+
 // ---- Comments (M2) ---------------------------------------------------------
 // A Comment is append-only and belongs to one Item. It has no Visibility of its own: it is read
 // through its Item (getItemFor), so it follows the Item's current Visibility. An Item that goes
@@ -614,6 +644,7 @@ const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
   putPushSubscription, deletePushSubscription,
   ...FRIDGE_RESOLVERS,
+  ...NOTE_TO_TASK_RESOLVERS,
   comments, addComment,
 };
 
