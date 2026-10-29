@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from "react";
 import type { Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
+import { keepPending, type ItemInput, type Op } from "./outbox";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
 export interface AlertPrefsLite { digestAt?: string; overdueAlerts?: boolean; quietStart?: string; quietEnd?: string }
@@ -14,12 +15,7 @@ export interface Profile {
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
 
-export type ItemInput = Pick<Item, "id" | "kind" | "title" | "notes" | "tags" | "assigneeId" | "visibility" | "severity" | "recurrence" | "dueAt" | "warnWindow" | "snoozedUntil" | "archived">;
-
-type Op =
-  | { id: string; type: "putItem"; input: ItemInput; expectedVersion?: number; changed: (keyof ItemInput)[] }
-  | { id: string; type: "completeItem"; itemId: string; at: number; note?: string }
-  | { id: string; type: "undoCompletion"; itemId: string; at: number };
+export type { ItemInput };
 
 interface State {
   ready: boolean;
@@ -120,13 +116,14 @@ function applyProfile(raw: any) {
   set({ profiles: { ...state.profiles, [p.userId]: p }, ...(state.me?.userId === p.userId ? { me: p } : {}) });
 }
 
-export async function refresh() {
+/** `serverCopyOf`: take this item from the server even if it has pending ops (conflict replay). */
+export async function refresh(serverCopyOf?: string) {
   try {
     const { snapshot } = await gql(Q.snapshot);
-    const items: Record<string, Item> = {};
-    for (const raw of snapshot.items) items[raw.id] = itemIn(raw);
-    // Keep optimistic edits for ops still in the outbox.
-    for (const op of state.outbox) if (op.type !== "putItem" && state.items[op.itemId]) items[op.itemId] = state.items[op.itemId];
+    const fromServer: Record<string, Item> = {};
+    for (const raw of snapshot.items) fromServer[raw.id] = itemIn(raw);
+    // Keep optimistic state (creates, edits, completions) for items with ops still in the outbox.
+    const items = keepPending(fromServer, state.items, state.outbox, serverCopyOf);
     const profiles: Record<string, Profile> = {};
     for (const raw of snapshot.profiles) profiles[raw.userId] = profileIn(raw);
     set({
@@ -206,7 +203,7 @@ export async function flush() {
         }
         if (e.kind === "conflict" && op.type === "putItem") {
           // Field-level last-write-wins: replay only the fields this edit changed on top of the latest server copy.
-          await refresh();
+          await refresh(op.input.id);
           const server = state.items[op.input.id];
           if (server) {
             const merged = { ...toInput(server), ...Object.fromEntries(op.changed.map((k) => [k, op.input[k]])) };
