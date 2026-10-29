@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
-import { loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
+import { addComment, loadComments, loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
 import { ago, newId, toLocalInput, when } from "../format";
 import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
@@ -35,6 +35,31 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
   const [notes, setNotes] = useState(item?.notes ?? "");
   const [lastDone, setLastDone] = useState("");
   const [history, setHistory] = useState<{ at: number; by: string; note?: string }[]>();
+  // Comments (M2): loaded on open, then kept live by onCommentChange through the store.
+  const comments = useStore((s) => (item ? s.comments[item.id] : undefined));
+  const [draft, setDraft] = useState("");
+  const [draftId, setDraftId] = useState(newId);
+  const [posting, setPosting] = useState(false);
+  const [commentError, setCommentError] = useState("");
+
+  useEffect(() => {
+    if (item) loadComments(item.id).catch(() => setCommentError("Couldn't load comments."));
+  }, [item]);
+
+  async function postComment() {
+    if (!item || !draft.trim() || posting) return;
+    setPosting(true);
+    setCommentError("");
+    try {
+      await addComment(item.id, draftId, draft.trim());
+      setDraft("");
+      setDraftId(newId());
+    } catch (e) {
+      setCommentError(`Couldn't post: ${(e as Error).message.replace(/^\w+Error: /, "")}`);
+    } finally {
+      setPosting(false);
+    }
+  }
 
   useEffect(() => {
     if (item) loadCompletions(item.id).then(setHistory, () => setHistory([]));
@@ -189,6 +214,22 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
                 </li>
               ))}
             </ul>
+            <h3>Comments</h3>
+            <ul className="history comments">
+              {comments === undefined && !commentError && <li>Loading…</li>}
+              {comments?.length === 0 && <li>No comments yet.</li>}
+              {comments?.map((c) => (
+                <li key={c.id}>
+                  <b>{nameOf(c.by)}</b> <q>{c.text}</q> <small>({ago(c.at)})</small>
+                </li>
+              ))}
+            </ul>
+            <div className="row">
+              <input placeholder="Add a comment" value={draft} maxLength={1000} onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void postComment()} />
+              <button disabled={posting || !draft.trim()} onClick={() => void postComment()}>Post</button>
+            </div>
+            {commentError && <small className="error">{commentError}</small>}
             {!live.archived && <button className="danger" onClick={() => (saveItem({ ...toInput(live), archived: true }), onClose())}>Archive</button>}
           </>
         )}
