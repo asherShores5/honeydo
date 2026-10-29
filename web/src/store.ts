@@ -237,8 +237,11 @@ function enqueue(op: Op) {
 }
 
 export function toInput(i: Item): ItemInput {
-  const { id, kind, title, notes, tags, assigneeId, visibility, severity, recurrence, dueAt, warnWindow, snoozedUntil, archived } = i;
-  return { id, kind, title, notes, tags, assigneeId, visibility, severity, recurrence, dueAt, warnWindow, snoozedUntil, archived };
+  const { id, title, notes, tags, assigneeId, visibility, severity, warnWindow, snoozedUntil, archived } = i;
+  const base = { id, title, notes, tags, assigneeId, visibility, severity, warnWindow, snoozedUntil, archived };
+  return i.kind === "chore"
+    ? { ...base, kind: "chore", recurrence: i.recurrence, dueAt: undefined }
+    : { ...base, kind: "task", recurrence: undefined, dueAt: i.dueAt };
 }
 
 // ---- actions (optimistic) ---------------------------------------------------

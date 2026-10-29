@@ -54,6 +54,29 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
   return out;
 }
 
+const FEED_SIZE = 100;
+
+/** The newest FEED_SIZE feed events `ctx` may see, newest first. Pages past events hidden from them. */
+async function visibleFeed(ctx: Ctx) {
+  const out: Record<string, unknown>[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
+        ExpressionAttributeValues: { ":pk": PK, ":p": "FEED#" },
+        ScanIndexForward: false,
+        Limit: FEED_SIZE,
+        ExclusiveStartKey,
+      }),
+    );
+    out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId)));
+    ExclusiveStartKey = r.LastEvaluatedKey;
+  } while (ExclusiveStartKey && out.length < FEED_SIZE);
+  return out.slice(0, FEED_SIZE);
+}
+
 function strip<T>(rec: Record<string, unknown>): T {
   const { PK: _pk, SK: _sk, GSI1PK: _g, ttl: _t, ...rest } = rec;
   return rest as T;
@@ -82,9 +105,10 @@ async function getItemFor(ctx: Ctx, id: string) {
   return r.Item;
 }
 
-async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string) {
+/** `eventId` defaults to a random one; pass a deterministic one when the event mirrors a record. */
+async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string, eventId?: string) {
   const at = Date.now();
-  const id = `${at}-${Math.random().toString(36).slice(2, 8)}`;
+  const id = eventId ?? `${at}-${Math.random().toString(36).slice(2, 8)}`;
   await ddb.send(
     new PutCommand({
       TableName: TABLE,
@@ -106,6 +130,19 @@ function touch(rec: Record<string, unknown>) {
   return { ...rec, GSI1PK: PK };
 }
 
+/** Sort key of one Completion; the timestamp is zero-padded so keys sort by time. */
+function completionKey(itemId: string, at: number) {
+  return `DONE#${itemId}#${String(at).padStart(15, "0")}`;
+}
+
+/** Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`; other errors rethrow. */
+function ifConditionFailed<T>(value: T) {
+  return (e: unknown) => {
+    if ((e as Error).name === "ConditionalCheckFailedException") return value;
+    throw e;
+  };
+}
+
 // ---- resolvers -------------------------------------------------------------
 
 async function me(ctx: Ctx) {
@@ -122,13 +159,13 @@ async function snapshot(ctx: Ctx) {
     queryPrefix("ITEM#"),
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
-    queryPrefix("FEED#", { limit: 100, newestFirst: true }),
+    visibleFeed(ctx),
   ]);
   return {
     items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
     tags: tags.map((t) => strip(t)),
     profiles: profiles.map(profileOut),
-    feed: feedRecs.filter((f) => canSee(f.visibility as string, ctx.userId)).map((f) => strip(f)),
+    feed: feedRecs.map((f) => strip(f)),
     serverTime: Date.now(),
   };
 }
@@ -180,13 +217,21 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
   const at = Math.min(Math.round(args.at ?? now), now + 60_000);
   if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
-  // Deterministic key makes replays from the offline outbox idempotent.
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: { PK, SK: `DONE#${args.itemId}#${String(at).padStart(15, "0")}`, itemId: args.itemId, at, by: ctx.userId, note: args.note || undefined },
-    }),
-  );
+  // Deterministic key makes replays from the offline outbox idempotent: if the Completion
+  // already exists this is a replay, so change nothing and log no second Activity entry.
+  const isNew = await ddb
+    .send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note: args.note || undefined },
+        ConditionExpression: "attribute_not_exists(SK)",
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!isNew) return change(item);
+
+  // A backdated Completion (older than lastDoneAt) still goes in History and Activity, but the
+  // condition below leaves lastDoneAt, and so the Item's Status, unchanged.
   let rec: Record<string, unknown> = item;
   try {
     const r = await ddb.send(
@@ -204,13 +249,26 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   } catch (e) {
     if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
   }
-  await feed(ctx, "completed", rec, args.note || undefined);
+  // Feed event ID comes from the Completion key, so one Completion is one Activity entry.
+  await feed(ctx, "completed", rec, args.note || undefined, `done-${args.itemId}-${at}`);
   return change(rec);
 }
 
 async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
-  await getItemFor(ctx, args.itemId);
-  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `DONE#${args.itemId}#${String(args.at).padStart(15, "0")}` } }));
+  const item = await getItemFor(ctx, args.itemId);
+  // Conditional delete: undo of a Completion that's already gone (outbox replay, or the
+  // partner undid it first) changes nothing and logs no "undone".
+  const existed = await ddb
+    .send(
+      new DeleteCommand({
+        TableName: TABLE,
+        Key: { PK, SK: completionKey(args.itemId, args.at) },
+        ConditionExpression: "attribute_exists(SK)",
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!existed) return change(item);
+
   const [latest] = await queryPrefix(`DONE#${args.itemId}#`, { limit: 1, newestFirst: true });
   const now = Date.now();
   const r = await ddb.send(

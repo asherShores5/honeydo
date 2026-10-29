@@ -1,5 +1,5 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import type { Item, Recurrence } from "@aubi/shared";
+import type { Chore, Item, Recurrence, Task } from "@aubi/shared";
 
 export class UserError extends Error {
   constructor(public type: "ValidationError" | "Forbidden" | "NotFound" | "ConflictError", message: string) {
@@ -68,21 +68,28 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     throw new UserError("Forbidden", "items can only be shared or private to yourself");
   }
   if (input.assigneeId && !users.includes(input.assigneeId)) throw new UserError("ValidationError", "unknown assignee");
+  // Story 5: the partner can't see a Private item, so they can't be its Assignee.
+  if (input.visibility !== "shared" && input.assigneeId && input.assigneeId !== userId) {
+    throw new UserError("ValidationError", "a private item can only be assigned to you");
+  }
   if (input.severity && !["low", "medium", "high"].includes(input.severity)) throw new UserError("ValidationError", "bad severity");
-  if (input.kind === "chore" && !input.recurrence) throw new UserError("ValidationError", "chores need a recurrence");
-  const recurrence = input.recurrence ? parseRecurrence(input.recurrence) : undefined;
+  let byKind: Pick<Chore, "kind" | "recurrence" | "dueAt"> | Pick<Task, "kind" | "recurrence" | "dueAt">;
+  if (input.kind === "chore") {
+    if (!input.recurrence) throw new UserError("ValidationError", "chores need a recurrence");
+    byKind = { kind: "chore", recurrence: parseRecurrence(input.recurrence) };
+  } else {
+    byKind = { kind: "task", recurrence: undefined, dueAt: input.dueAt ?? undefined };
+  }
 
-  const fields: Omit<Item, "createdBy" | "createdAt" | "updatedAt" | "version" | "lastDoneAt" | "lastDoneBy"> = {
+  const fields = {
     id: input.id,
-    kind: input.kind,
+    ...byKind,
     title,
     notes: input.notes || undefined,
     tags: [...new Set(input.tags)],
     assigneeId: input.assigneeId || undefined,
     visibility: input.visibility as Item["visibility"],
     severity: (input.severity || undefined) as Item["severity"],
-    recurrence: input.kind === "chore" ? recurrence : undefined,
-    dueAt: input.kind === "task" ? input.dueAt ?? undefined : undefined,
     warnWindow: input.warnWindow ?? undefined,
     snoozedUntil: input.snoozedUntil ?? undefined,
     archived: input.archived,

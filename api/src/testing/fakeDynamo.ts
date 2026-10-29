@@ -157,15 +157,18 @@ export class FakeDocClient {
       .filter((r) => evalCondition(terms.join(" AND "), r, n, v))
       .sort((a, b) => (String(a.SK) < String(b.SK) ? -1 : 1));
     if (input.ScanIndexForward === false) rows.reverse();
+    // Like DynamoDB: resume strictly after the start key's position (it needn't still exist),
+    // Limit caps items evaluated before any filtering, and a page that hits Limit always carries
+    // LastEvaluatedKey, even when nothing is left (the next page is then empty).
     if (input.ExclusiveStartKey) {
-      const i = rows.findIndex((r) => keyOf(r) === keyOf(input.ExclusiveStartKey!));
-      rows = rows.slice(i + 1);
+      const start = String(input.ExclusiveStartKey.SK);
+      rows = rows.filter((r) => (input.ScanIndexForward === false ? String(r.SK) < start : String(r.SK) > start));
     }
     const page = input.Limit ? rows.slice(0, input.Limit) : rows;
     const last = page.at(-1);
     return {
       Items: page.map((r) => structuredClone(r)),
-      LastEvaluatedKey: input.Limit && rows.length > input.Limit && last ? { PK: last.PK, SK: last.SK } : undefined,
+      LastEvaluatedKey: input.Limit && page.length === input.Limit && last ? { PK: last.PK, SK: last.SK } : undefined,
     };
   }
 }

@@ -11,18 +11,15 @@ export type Severity = "low" | "medium" | "high";
 
 export type Status = "green" | "yellow" | "red" | "snoozed" | "done";
 
-export interface Item {
+/** Fields every Item has, whatever its kind. */
+interface ItemBase {
   id: string;
-  kind: "chore" | "task";
   title: string;
   notes?: string;
   tags: string[];
   assigneeId?: UserId;
   visibility: "shared" | `private:${UserId}`;
   severity?: Severity;
-  recurrence?: Recurrence;
-  /** One-off tasks only, epoch ms. */
-  dueAt?: number;
   /** Override for the yellow window, ms. */
   warnWindow?: number;
   lastDoneAt?: number;
@@ -34,6 +31,23 @@ export interface Item {
   updatedAt: number;
   version: number;
 }
+
+/** Repeats on a Recurrence; Done Resets it, never finishes it. */
+export interface Chore extends ItemBase {
+  kind: "chore";
+  recurrence: Recurrence;
+  dueAt?: never;
+}
+
+/** One-off; Done finishes it. */
+export interface Task extends ItemBase {
+  kind: "task";
+  recurrence?: never;
+  /** Epoch ms; absent = undated. */
+  dueAt?: number;
+}
+
+export type Item = Chore | Task;
 
 export interface Completion {
   itemId: string;
