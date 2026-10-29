@@ -54,6 +54,29 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
   return out;
 }
 
+const FEED_SIZE = 100;
+
+/** The newest FEED_SIZE feed events `ctx` may see, newest first. Pages past events hidden from them. */
+async function visibleFeed(ctx: Ctx) {
+  const out: Record<string, unknown>[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
+        ExpressionAttributeValues: { ":pk": PK, ":p": "FEED#" },
+        ScanIndexForward: false,
+        Limit: FEED_SIZE,
+        ExclusiveStartKey,
+      }),
+    );
+    out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId)));
+    ExclusiveStartKey = r.LastEvaluatedKey;
+  } while (ExclusiveStartKey && out.length < FEED_SIZE);
+  return out.slice(0, FEED_SIZE);
+}
+
 function strip<T>(rec: Record<string, unknown>): T {
   const { PK: _pk, SK: _sk, GSI1PK: _g, ttl: _t, ...rest } = rec;
   return rest as T;
@@ -136,13 +159,13 @@ async function snapshot(ctx: Ctx) {
     queryPrefix("ITEM#"),
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
-    queryPrefix("FEED#", { limit: 100, newestFirst: true }),
+    visibleFeed(ctx),
   ]);
   return {
     items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
     tags: tags.map((t) => strip(t)),
     profiles: profiles.map(profileOut),
-    feed: feedRecs.filter((f) => canSee(f.visibility as string, ctx.userId)).map((f) => strip(f)),
+    feed: feedRecs.map((f) => strip(f)),
     serverTime: Date.now(),
   };
 }
