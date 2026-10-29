@@ -14,6 +14,8 @@ const TAG = `id name group color order deleted updatedAt`;
 const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs activitySeenAt setupComplete updatedAt`;
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
 const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
+// Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.
+const NOTE = `id text by at pinned expiresAt visibility updatedAt`;
 
 const COMMENT = `id itemId at by text`;
 const COMMENT_CHANGE = `comment { ${COMMENT} } visibility`;
@@ -21,7 +23,7 @@ const COMMENT_CHANGE = `comment { ${COMMENT} } visibility`;
 export const Q = {
   me: `query { me { ${PROFILE} } }`,
   snapshot: `query { snapshot { items { ${ITEM} } tags { ${TAG} } profiles { ${PROFILE} }
-    feed { id at by type itemId title detail } serverTime } }`,
+    feed { id at by type itemId title detail } notes { ${NOTE} } serverTime } }`,
   completions: `query($itemId: ID!, $limit: Int) { completions(itemId: $itemId, limit: $limit) { itemId at by note } }`,
   putItem: `mutation($input: ItemInput!, $expectedVersion: Int) { putItem(input: $input, expectedVersion: $expectedVersion) { ${CHANGE} } }`,
   completeItem: `mutation($itemId: ID!, $at: Float, $note: String) { completeItem(itemId: $itemId, at: $at, note: $note) { ${CHANGE} } }`,
@@ -39,6 +41,12 @@ export const Q = {
   onItemChange: `subscription { onItemChange { ${CHANGE} } }`,
   onTagChange: `subscription { onTagChange { ${TAG} } }`,
   onProfileChange: `subscription { onProfileChange { ${PROFILE} } }`,
+  // ---- Fridge Notes (m2/02) ----
+  postNote: `mutation($id: ID!, $text: String!, $pinned: Boolean, $expiresAt: Float) {
+    postNote(id: $id, text: $text, pinned: $pinned, expiresAt: $expiresAt) { ${NOTE} } }`,
+  pinNote: `mutation($id: ID!, $pinned: Boolean!) { pinNote(id: $id, pinned: $pinned) { ${NOTE} } }`,
+  setNoteExpiry: `mutation($id: ID!, $expiresAt: Float) { setNoteExpiry(id: $id, expiresAt: $expiresAt) { ${NOTE} } }`,
+  onNoteChange: `subscription { onNoteChange { ${NOTE} } }`,
 };
 
 /** One call may take this long before it counts as offline, so a weak bar can't hang the app. */
