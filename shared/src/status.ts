@@ -53,11 +53,10 @@ export interface Schedule {
 }
 
 export function schedule(item: Item): Schedule {
-  const rec = item.recurrence;
-
-  if (item.kind === "task" || !rec) {
+  if (item.kind === "task") {
     return { nextDue: item.dueAt ?? null, warnWindow: item.warnWindow ?? DAY };
   }
+  const rec = item.recurrence;
 
   if (rec.type === "interval") {
     const interval = rec.every * UNIT_MS[rec.unit];
