@@ -301,13 +301,57 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
     throw new UserError("ValidationError", "bad tag");
   }
   const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
-  await ddb.send(new PutCommand({ TableName: TABLE, Item: rec }));
+  // A Tag belongs to exactly one Tag group: an ID collision must not move it to another group.
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: rec,
+      ConditionExpression: "attribute_not_exists(SK) OR #g = :g",
+      ExpressionAttributeNames: { "#g": "group" },
+      ExpressionAttributeValues: { ":g": group.trim() },
+    }),
+  ).catch((e) => {
+    if (e.name === "ConditionalCheckFailedException") throw new UserError("ValidationError", "tag ID belongs to another group");
+    throw e;
+  });
   return strip(rec);
+}
+
+/**
+ * Strip a deleted Tag from every item that carries it (all Visibilities), bumping each item's
+ * version so stale edits conflict instead of re-adding the dead ID. One partition, small data.
+ * Clients refresh on the deleted-Tag event to pick up the new versions.
+ */
+async function removeTagFromItems(tagId: string) {
+  for (const item of await queryPrefix("ITEM#")) {
+    let cur: Record<string, unknown> | undefined = item;
+    for (let attempt = 0; cur && (cur.tags as string[] | undefined)?.includes(tagId) && attempt < 5; attempt++) {
+      try {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: TABLE,
+            Key: { PK, SK: cur.SK },
+            UpdateExpression: "SET tags = :tags, updatedAt = :now, version = version + :one",
+            ConditionExpression: "version = :v",
+            ExpressionAttributeValues: {
+              ":tags": (cur.tags as string[]).filter((t) => t !== tagId),
+              ":now": Date.now(), ":one": 1, ":v": cur.version,
+            },
+          }),
+        );
+        break;
+      } catch (e) {
+        if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
+        cur = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: cur.SK } }))).Item;
+      }
+    }
+  }
 }
 
 async function deleteTag(_ctx: Ctx, args: { id: string }) {
   const r = await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `TAG#${args.id}` }, ReturnValues: "ALL_OLD" }));
   if (!r.Attributes) throw new UserError("NotFound", "tag not found");
+  await removeTagFromItems(args.id);
   return { ...strip<Record<string, unknown>>(r.Attributes), deleted: true, updatedAt: Date.now() };
 }
 

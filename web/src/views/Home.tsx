@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { schedule, status, urgency, type Item, type Status } from "@aubi/shared";
 import { completeItem, nameOf, saveProfile, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, span } from "../format";
+import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
 import { Settings } from "./Settings";
 import { finishedTasks } from "../finished";
@@ -19,22 +20,9 @@ function useNow(ms = 30_000) {
   return now;
 }
 
-export function groupTags(tags: Record<string, Tag>) {
-  const groups = new Map<string, Tag[]>();
-  for (const t of Object.values(tags).sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || a.name.localeCompare(b.name))) {
-    groups.set(t.group, [...(groups.get(t.group) ?? []), t]);
-  }
-  return groups;
-}
-
-/** OR within a tag group, AND across groups (SPEC §4.3). */
+/** Tag filter (OR within a group, AND across groups) plus the Who filter. */
 function matches(item: Item, selected: Set<string>, tags: Record<string, Tag>, who: Who, me: string) {
-  const byGroup = new Map<string, string[]>();
-  for (const id of selected) {
-    const g = tags[id]?.group;
-    if (g) byGroup.set(g, [...(byGroup.get(g) ?? []), id]);
-  }
-  for (const ids of byGroup.values()) if (!ids.some((id) => item.tags.includes(id))) return false;
+  if (!matchesTags(item, selected, tags)) return false;
   if (who === "mine") return item.assigneeId === me;
   if (who === "partner") return !!item.assigneeId && item.assigneeId !== me;
   if (who === "unassigned") return !item.assigneeId;
@@ -127,7 +115,7 @@ export function Home() {
             Filter{filterCount ? ` · ${filterCount}` : ""} {showFilters ? "▴" : "▾"}
           </button>
           {[...selected].map((id) => tags[id] && (
-            <button key={id} className="chip on" onClick={() => toggle(id)}>{tags[id].name} ✕</button>
+            <button key={id} className="chip on" onClick={() => toggle(id)}>{chipLabel(tags[id], tags)} ✕</button>
           ))}
           {showFilters && (
             <div className="filter-panel">
@@ -225,7 +213,7 @@ function ItemRow({ item, now, tags, onOpen, onDone }: { item: Item; now: number;
           {item.assigneeId && ` · for ${nameOf(item.assigneeId)}`}
         </span>
         {item.tags.length > 0 && (
-          <span className="tags">{item.tags.map((t) => tags[t] && <span key={t}>{tags[t].name}</span>)}</span>
+          <span className="tags">{item.tags.map((t) => tags[t] && <span key={t}>{chipLabel(tags[t], tags)}</span>)}</span>
         )}
       </button>
       <button className="done" onClick={onDone} aria-label={`Mark ${item.title} done`}>✓</button>

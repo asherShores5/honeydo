@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
 import { loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
 import { ago, newId, toLocalInput, when } from "../format";
-import { groupTags } from "./Home";
+import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
