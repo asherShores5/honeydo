@@ -210,8 +210,8 @@ PK = `HH#<householdId>` for everything (one household → one partition, fine at
 | Tag / tag group | `TAG#<id>`, `TGRP#<id>` |
 | Profile | `USER#<userId>` |
 | Saved view | `VIEW#<userId>#<id>` |
-| Push subscription | `PUSH#<userId>#<hash>` |
-| Notification state | `NSTATE#<itemId>#<userId>` (last alerted, avoids duplicate pushes) |
+| Push subscription | `PUSH#<userId>#<deviceId>`: `endpoint`, `p256dh`, `auth`, `createdAt`. `deviceId` is a random ID the app keeps in localStorage, so re-enabling on the same device overwrites the record and a second device adds one. Written by `putPushSubscription` (userId always from the caller's token), removed by `deletePushSubscription` or when the push service answers 404/410. Never in the snapshot or on the Profile, which the partner can read |
+| Notification state | `NSTATE#<itemId>#<userId>`: `itemId`, `userId`, `lastAlertedAt` (epoch ms of the last Ding), `ttl` (+30 days, so deleted items clean up). The Notifier claims it with a conditional write (`lastAlertedAt` still equals what it read) before sending, so a duplicate run never sends the same Ding twice |
 
 GSI1 (`PK`, `updatedAt`) is written for a future delta sync; nothing queries it yet. Private items carry `visibility` and are
 filtered in resolvers.
@@ -272,7 +272,15 @@ Secrets Manager ($0.40/secret), and Cognito Plus tier. Set an AWS Budget alarm a
 - S3 is private behind CloudFront OAC, TLS only, strict CSP.
 - DynamoDB PITR for point-in-time restore; the table has `RemovalPolicy.RETAIN` and deletion
   protection.
-- VAPID private key is stored in SSM SecureString, readable only by the notifier role.
+- VAPID private key is stored in SSM SecureString. Only two roles can read it: the notifier
+  role, and the key-provisioning function (VapidKeysFn), which reads it only to rebuild a
+  missing public key after a crash between its two writes. The
+  deploy creates the pair itself (custom resource `VapidKeys` in AppStack, logic in
+  `api/src/vapid.ts`): only if `/aubi-honey/vapid/private` is missing, never overwriting, and
+  keeping both parameters if the stack is deleted. It returns only the public key, which
+  config.json takes from it. No manual step is needed. A new pair would invalidate every push
+  subscription, so rotating means deleting both parameters by hand, redeploying, and turning
+  notifications on again on both phones.
 
 ## 9. Milestones
 

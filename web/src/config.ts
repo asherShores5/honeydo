@@ -4,6 +4,8 @@ export interface Config {
   clientId: string;
   graphqlUrl: string;
   usernames: string[];
+  /** Web Push VAPID public key (base64url), from SSM at deploy time. Missing in configs cached before M4. */
+  vapidPublicKey?: string;
 }
 
 let config: Config | undefined;

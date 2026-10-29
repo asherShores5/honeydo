@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
+import { readAlertPrefs, type AlertPrefs, type Severity } from "@aubi/shared";
 import { listPasskeys, registerPasskey, signOut } from "../auth";
 import { removeTag, saveProfile, saveTag, toast, useStore } from "../store";
 import { groupTags, tagId } from "../tags";
+import { releaseThisDevice } from "../notifications";
+import { NotificationsStep } from "./Notifications";
 import { COLORS } from "./Setup";
+
+const SEVERITIES: [Severity, string][] = [["low", "Low"], ["medium", "Medium"], ["high", "High"]];
 
 export function Settings({ onClose }: { onClose: () => void }) {
   const me = useStore((s) => s.me!);
   const tags = useStore((s) => s.tags);
   const [name, setName] = useState(me.displayName ?? "");
-  const [digestAt, setDigestAt] = useState(me.alertPrefs?.digestAt ?? "20:00");
+  const [prefs, setPrefs] = useState(() => readAlertPrefs(me.alertPrefs));
   const [passkeys, setPasskeys] = useState<number>();
   const [newTag, setNewTag] = useState({ name: "", group: "Category" });
 
@@ -22,6 +27,16 @@ export function Settings({ onClose }: { onClose: () => void }) {
     } catch (e) {
       toast((e as Error).message);
     }
+  }
+
+  // Send only the pref that changed; the server patches it onto the stored ones.
+  function savePref<K extends keyof AlertPrefs>(k: K, v: AlertPrefs[K]) {
+    if (v === "") return; // a cleared time input; keep the stored value
+    void patch({ alertPrefs: { [k]: v } });
+  }
+
+  function setSlot(sev: Severity, i: number, v: string) {
+    setPrefs({ ...prefs, slots: { ...prefs.slots, [sev]: prefs.slots[sev].map((s, j) => (j === i ? v : s)) } });
   }
 
   const groups = groupTags(tags);
@@ -50,10 +65,42 @@ export function Settings({ onClose }: { onClose: () => void }) {
             {["cards", "compact"].map((d) => <button key={d} className={(me.density ?? "cards") === d ? "on" : ""} onClick={() => patch({ density: d })}>{d}</button>)}
           </div>
         </label>
+
+        <h3>Alerts</h3>
+        <NotificationsStep />
         <label>Handoff time
-          <input type="time" value={digestAt} onChange={(e) => setDigestAt(e.target.value)}
-            onBlur={() => digestAt && patch({ alertPrefs: { ...(me.alertPrefs ?? {}), digestAt } })} />
+          <input type="time" value={prefs.handoffAt} onChange={(e) => setPrefs({ ...prefs, handoffAt: e.target.value })}
+            onBlur={() => savePref("handoffAt", prefs.handoffAt)} />
+          <small>Your once-a-day Handoff: what got done, what's overdue and what's due before the next one. It keeps coming even with overdue alerts off.</small>
         </label>
+        <label>Overdue alerts
+          <div className="seg">
+            {[true, false].map((on) => (
+              <button key={String(on)} className={prefs.overdueAlerts === on ? "on" : ""}
+                onClick={() => (setPrefs({ ...prefs, overdueAlerts: on }), savePref("overdueAlerts", on))}>{on ? "on" : "off"}</button>
+            ))}
+          </div>
+        </label>
+        <label>Quiet hours
+          <div className="row">
+            <input type="time" aria-label="Quiet hours start" value={prefs.quietStart}
+              onChange={(e) => setPrefs({ ...prefs, quietStart: e.target.value })} onBlur={() => savePref("quietStart", prefs.quietStart)} />
+            to
+            <input type="time" aria-label="Quiet hours end" value={prefs.quietEnd}
+              onChange={(e) => setPrefs({ ...prefs, quietEnd: e.target.value })} onBlur={() => savePref("quietEnd", prefs.quietEnd)} />
+          </div>
+          <small>No Dings in this span; any that land in it come at the end.</small>
+        </label>
+        {SEVERITIES.map(([sev, label]) => (
+          <label key={sev}>{label} ding times
+            <div className="row">
+              {prefs.slots[sev].map((s, i) => (
+                <input key={i} type="time" aria-label={`${label} ding ${i + 1}`} value={s} onChange={(e) => setSlot(sev, i, e.target.value)}
+                  onBlur={() => prefs.slots[sev].every(Boolean) && savePref("slots", prefs.slots)} />
+              ))}
+            </div>
+          </label>
+        ))}
 
         <h3>Tags</h3>
         {[...groups].map(([g, ts]) => (
@@ -81,7 +128,8 @@ export function Settings({ onClose }: { onClose: () => void }) {
         <button onClick={() => registerPasskey().then(() => (toast("Passkey added"), setPasskeys((passkeys ?? 0) + 1)), (e) => toast(e.message))}>
           Add a passkey for this device
         </button>
-        <button className="danger" onClick={() => void signOut()}>Sign out</button>
+        {/* Push cleanup first, while the tokens still work (story 25). */}
+        <button className="danger" onClick={() => void releaseThisDevice().finally(signOut)}>Sign out</button>
       </div>
     </div>
   );

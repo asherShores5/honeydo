@@ -1,14 +1,39 @@
-import type { AlertPrefs, Item, UserId } from "./types";
+import type { AlertPrefs, Item, Severity, UserId } from "./types";
 import { DAY, fromWall, parseHHMM, toWall } from "./time";
 import { schedule, status } from "./status";
 
 export const DEFAULT_ALERT_PREFS: AlertPrefs = {
+  // One Slot a day for low Severity, two for medium, three for high (SPEC §4.6).
   slots: { low: ["09:00"], medium: ["09:00", "17:00"], high: ["09:00", "13:00", "19:00"] },
   quietStart: "21:00",
   quietEnd: "07:00",
-  digestAt: "20:00",
+  handoffAt: "20:00",
   overdueAlerts: true,
 };
+
+/** Dings per day for each Severity, taken from the default Slots so the two can't disagree. */
+export const SLOTS_PER_SEVERITY: Readonly<Record<Severity, number>> = {
+  low: DEFAULT_ALERT_PREFS.slots.low.length,
+  medium: DEFAULT_ALERT_PREFS.slots.medium.length,
+  high: DEFAULT_ALERT_PREFS.slots.high.length,
+};
+
+/**
+ * A Member's alert prefs as stored on their Profile, with defaults filled in. Profiles saved
+ * before M4 carry the Handoff time as `digestAt`; that is read as `handoffAt`.
+ */
+export function readAlertPrefs(stored: unknown): AlertPrefs {
+  const raw = stored && typeof stored === "object" ? (stored as Record<string, unknown>) : {};
+  const p = raw as Partial<AlertPrefs> & { digestAt?: unknown };
+  const d = DEFAULT_ALERT_PREFS;
+  return {
+    slots: { low: p.slots?.low ?? d.slots.low, medium: p.slots?.medium ?? d.slots.medium, high: p.slots?.high ?? d.slots.high },
+    quietStart: p.quietStart ?? d.quietStart,
+    quietEnd: p.quietEnd ?? d.quietEnd,
+    handoffAt: p.handoffAt ?? (typeof p.digestAt === "string" ? p.digestAt : d.handoffAt),
+    overdueAlerts: p.overdueAlerts ?? d.overdueAlerts,
+  };
+}
 
 function minutes(hhmm: string): number {
   const { hour, minute } = parseHHMM(hhmm);
