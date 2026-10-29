@@ -2,7 +2,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { registerServiceWorker } from "./registerSw";
 import "./styles.css";
+
+void registerServiceWorker();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
