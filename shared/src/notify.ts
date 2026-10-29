@@ -9,6 +9,8 @@ import { DAY, HOUR } from "./time";
 export interface NotifyMember {
   userId: UserId;
   prefs: AlertPrefs;
+  /** Display name, for "who did it" in the partner's Handoff. */
+  name?: string;
 }
 
 /** Notification state: the last Ding one Member got about one Item (an NSTATE record). */
