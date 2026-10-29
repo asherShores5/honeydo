@@ -20,6 +20,8 @@ export type Who = "anyone" | "mine" | "partner" | "unassigned";
 export interface Profile {
   userId: string; username: string; displayName?: string; color?: string; theme?: string; density?: string;
   defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsPatch | null;
+  /** When I last opened Activity (server ms). Read with `unreadActivity`. */
+  activitySeenAt?: number | null;
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
@@ -327,6 +329,18 @@ export async function saveProfile(patch: Partial<Profile>) {
   const input: Record<string, unknown> = { ...patch };
   for (const k of ["defaultView", "savedViews", "alertPrefs"]) if (k in input) input[k] = JSON.stringify(input[k]);
   applyProfile((await gql(Q.putProfile, { input })).putProfile);
+}
+
+/**
+ * Opening Activity: clear the unread marker here at once, then save last seen to the Profile so
+ * my other devices clear too. `at` is the newest entry's server time, so device clocks don't
+ * matter. If the save fails (offline) the next open saves it again.
+ */
+export function markActivitySeen(at: number) {
+  const me = state.me;
+  if (!me || (me.activitySeenAt ?? 0) >= at) return;
+  set({ me: { ...me, activitySeenAt: at } });
+  void saveProfile({ activitySeenAt: at }).catch(() => {});
 }
 
 export async function loadCompletions(itemId: string) {

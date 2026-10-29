@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { schedule, status, urgency, type Item, type Status } from "@aubi/shared";
-import { completeItem, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
+import { schedule, status, unreadActivity, urgency, type Item, type Status } from "@aubi/shared";
+import { completeItem, markActivitySeen, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, span } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
@@ -75,6 +75,12 @@ export function Home() {
     return () => clearTimeout(t);
   }, [selected, who]);
 
+  // Unread marker on Activity: looking at the tab marks everything in it seen.
+  const unread = unreadActivity(feed, me.userId, me.activitySeenAt);
+  useEffect(() => {
+    if (tab === "activity" && feed.length) markActivitySeen(Math.max(...feed.map((e) => e.at)));
+  }, [tab, feed]);
+
   useEffect(() => {
     if (!undo) return;
     const t = setTimeout(() => setUndo(null), 6000);
@@ -127,7 +133,9 @@ export function Home() {
         <button className={tab === "ontrack" ? "on" : ""} onClick={() => setTab("ontrack")}>On track <b>{visible.ontrack.length}</b></button>
         <button className={tab === "overdue" ? "on red" : "red"} onClick={() => setTab("overdue")}>Overdue <b>{visible.overdue.length}</b></button>
         <button className={tab === "finished" ? "on" : ""} onClick={() => setTab("finished")}>Finished</button>
-        <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
+        <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
+          Activity{unread > 0 && <b className="unread" aria-label={`${unread} unread`}>{unread > 99 ? "99+" : unread}</b>}
+        </button>
       </nav>
 
       {(tab === "ontrack" || tab === "overdue") && (
