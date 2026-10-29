@@ -14,7 +14,7 @@ import {
   UserError, canSee, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
   type ItemInput, type PushSubscriptionInput,
 } from "./rules";
-import { PK, ifConditionFailed, pushKey } from "./table";
+import { PK, commentKey, ifConditionFailed, pushKey } from "./table";
 import { fridgeNotes, type Note } from "@aubi/shared";
 import { validateNoteExpiry, validateNoteId, validateNoteInput, type NoteInput } from "./rules";
 import { noteKey } from "./table";
@@ -64,8 +64,12 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
 
 const ACTIVITY_SIZE = 100;
 
-/** The newest ACTIVITY_SIZE Activity events `ctx` may see, newest first. Pages past events hidden from them. */
-async function visibleActivity(ctx: Ctx) {
+/**
+ * The newest ACTIVITY_SIZE Activity events `ctx` may see, newest first. Pages past events hidden
+ * from them: Private to the partner when logged, or about an Item in `hiddenItems` (one that has
+ * since gone Private, so its earlier events and Comments stop reaching the partner).
+ */
+async function visibleActivity(ctx: Ctx, hiddenItems: Set<unknown> = new Set()) {
   const out: Record<string, unknown>[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
@@ -79,7 +83,7 @@ async function visibleActivity(ctx: Ctx) {
         ExclusiveStartKey,
       }),
     );
-    out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId)));
+    out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId) && !hiddenItems.has(f.itemId)));
     ExclusiveStartKey = r.LastEvaluatedKey;
   } while (ExclusiveStartKey && out.length < ACTIVITY_SIZE);
   return out.slice(0, ACTIVITY_SIZE);
@@ -193,11 +197,14 @@ async function me(ctx: Ctx) {
 }
 
 async function snapshot(ctx: Ctx) {
+  const itemsP = queryPrefix("ITEM#");
+  const hiddenItems = (recs: Record<string, unknown>[]) =>
+    new Set(recs.filter((i) => !canSee(i.visibility as string, ctx.userId)).map((i) => i.id));
   const [items, tags, profiles, feedRecs, notes] = await Promise.all([
-    queryPrefix("ITEM#"),
+    itemsP,
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
-    visibleActivity(ctx),
+    itemsP.then((recs) => visibleActivity(ctx, hiddenItems(recs))),
     fridge(ctx),
   ]);
   return {
@@ -574,11 +581,71 @@ async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
 
 const NOTE_TO_TASK_RESOLVERS = { markNoteTasked };
 
+// ---- Comments (M2) ---------------------------------------------------------
+// A Comment is append-only and belongs to one Item. It has no Visibility of its own: it is read
+// through its Item (getItemFor), so it follows the Item's current Visibility. An Item that goes
+// Private takes its old Comments with it, and they come back if it is shared again.
+
+const COMMENT_MAX = 1000;
+
+function commentOut(rec: Record<string, unknown>) {
+  const { id, itemId, at, by, text } = rec;
+  return { id, itemId, at, by, text };
+}
+
+/** The Comments on one Item the caller can see, oldest first. */
+async function comments(ctx: Ctx, args: { itemId: string }) {
+  await getItemFor(ctx, args.itemId);
+  const recs = await queryPrefix(commentKey(args.itemId, ""));
+  return recs.sort((a, b) => (a.at as number) - (b.at as number)).map(commentOut);
+}
+
+/**
+ * Add a Comment and its Activity entry. The client picks the ID, so a retry after a lost response
+ * writes nothing twice and returns the stored Comment. The CommentChange envelope carries the
+ * Item's Visibility for the onCommentChange filter; the write is conditional on the Item still
+ * having that Visibility, so a Comment can't be published as shared after the Item went Private.
+ */
+async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: string }) {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(args.id ?? "")) throw new UserError("ValidationError", "bad comment id");
+  const text = (args.text ?? "").trim();
+  if (!text || text.length > COMMENT_MAX) throw new UserError("ValidationError", "comment must be 1-1000 characters");
+  const item = await getItemFor(ctx, args.itemId);
+  const key = { PK, SK: commentKey(args.itemId, args.id) };
+  const rec = { ...key, id: args.id, itemId: args.itemId, at: Date.now(), by: ctx.userId, text };
+  const written = await ddb
+    .send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            ConditionCheck: {
+              TableName: TABLE,
+              Key: { PK, SK: `ITEM#${args.itemId}` },
+              ConditionExpression: "visibility = :vis",
+              ExpressionAttributeValues: { ":vis": item.visibility },
+            },
+          },
+          { Put: { TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "commented", item, text, `comment-${args.id}`) } },
+        ],
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (written) return { comment: commentOut(rec), visibility: item.visibility as string };
+  // Either a replay (the Comment is there) or the Item's Visibility just changed: re-read both.
+  const stored = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  const now = await getItemFor(ctx, args.itemId);
+  if (!stored) throw new UserError("ConflictError", "item changed, retry");
+  if (stored.by !== ctx.userId) throw new UserError("ConflictError", "comment id taken");
+  return { comment: commentOut(stored), visibility: now.visibility as string };
+}
+
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
   putPushSubscription, deletePushSubscription,
   ...FRIDGE_RESOLVERS,
   ...NOTE_TO_TASK_RESOLVERS,
+  comments, addComment,
 };
 
 export async function handler(event: AppSyncResolverEvent<Record<string, unknown>>) {

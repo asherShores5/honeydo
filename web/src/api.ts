@@ -17,6 +17,9 @@ const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
 // Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.
 const NOTE = `id text by at pinned expiresAt visibility updatedAt taskId`;
 
+const COMMENT = `id itemId at by text`;
+const COMMENT_CHANGE = `comment { ${COMMENT} } visibility`;
+
 export const Q = {
   me: `query { me { ${PROFILE} } }`,
   snapshot: `query { snapshot { items { ${ITEM} } tags { ${TAG} } profiles { ${PROFILE} }
@@ -31,6 +34,10 @@ export const Q = {
   putPushSubscription: `mutation($deviceId: ID!, $endpoint: String!, $p256dh: String!, $auth: String!) {
     putPushSubscription(deviceId: $deviceId, endpoint: $endpoint, p256dh: $p256dh, auth: $auth) { deviceId enabled } }`,
   deletePushSubscription: `mutation($deviceId: ID!) { deletePushSubscription(deviceId: $deviceId) { deviceId enabled } }`,
+  // ---- Comments (M2) ----
+  comments: `query($itemId: ID!) { comments(itemId: $itemId) { ${COMMENT} } }`,
+  addComment: `mutation($itemId: ID!, $id: ID!, $text: String!) { addComment(itemId: $itemId, id: $id, text: $text) { ${COMMENT_CHANGE} } }`,
+  onCommentChange: `subscription { onCommentChange { ${COMMENT_CHANGE} } }`,
   onItemChange: `subscription { onItemChange { ${CHANGE} } }`,
   onTagChange: `subscription { onTagChange { ${TAG} } }`,
   onProfileChange: `subscription { onProfileChange { ${PROFILE} } }`,

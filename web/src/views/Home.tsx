@@ -239,7 +239,7 @@ export function Home() {
       {editing && <Editor item={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
       {fromNote && (
         <Editor
-          draft={taskDraft(fromNote)}
+          prefill={taskDraft(fromNote)}
           onSaved={(s) => s.kind === "task" && markNoteTasked(fromNote.id, s.id)}
           onClose={() => setFromNote(null)}
         />
