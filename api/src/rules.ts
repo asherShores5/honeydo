@@ -1,14 +1,12 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import type { Chore, Item, Recurrence, Task } from "@aubi/shared";
+import { SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
+
+export { canSee } from "@aubi/shared";
 
 export class UserError extends Error {
   constructor(public type: "ValidationError" | "Forbidden" | "NotFound" | "ConflictError", message: string) {
     super(message);
   }
-}
-
-export function canSee(visibility: string, userId: string): boolean {
-  return visibility === "shared" || visibility === `private:${userId}`;
 }
 
 export interface ItemInput {
@@ -115,13 +113,74 @@ export function validateProfileInput(input: Record<string, unknown>) {
       out[k] = v;
     }
   }
-  const prefs = out.alertPrefs as Record<string, unknown> | undefined;
-  if (prefs?.digestAt !== undefined && !HHMM_RE.test(String(prefs.digestAt))) {
-    throw new UserError("ValidationError", "digest time must be HH:MM");
-  }
-  if (out.setupComplete && !prefs?.digestAt && input.setupComplete) {
-    // SPEC §4.6: daily summary time is required during setup.
-    throw new UserError("ValidationError", "set a daily summary time to finish setup");
+  if (out.alertPrefs !== undefined) validateAlertPrefs(out.alertPrefs);
+  const prefs = out.alertPrefs as Partial<AlertPrefs> | undefined;
+  if (out.setupComplete && !prefs?.handoffAt && input.setupComplete) {
+    // SPEC §4.6: the Handoff time is required during setup.
+    throw new UserError("ValidationError", "set a Handoff time to finish setup");
   }
   return out;
+}
+
+const ALERT_PREF_KEYS = ["slots", "quietStart", "quietEnd", "handoffAt", "overdueAlerts"];
+
+/**
+ * Alert prefs as a Member saves them. Any key may be left out (stored defaults fill it on read),
+ * but every key given must be valid, and `slots` must list every Severity with its exact count.
+ * The pre-M4 `digestAt` key counts as unknown: clients send `handoffAt`.
+ */
+function validateAlertPrefs(v: unknown): asserts v is Partial<AlertPrefs> {
+  const bad = (msg: string): never => {
+    throw new UserError("ValidationError", msg);
+  };
+  if (!v || typeof v !== "object" || Array.isArray(v)) bad("alert prefs must be an object");
+  const p = v as Record<string, unknown>;
+  for (const k of Object.keys(p)) if (!ALERT_PREF_KEYS.includes(k)) bad(`unknown alert pref ${k}`);
+  const hhmm = (x: unknown, what: string) => (typeof x === "string" && HHMM_RE.test(x)) || bad(`${what} must be HH:MM`);
+  if (p.handoffAt !== undefined) hhmm(p.handoffAt, "Handoff time");
+  if (p.quietStart !== undefined) hhmm(p.quietStart, "quiet hours start");
+  if (p.quietEnd !== undefined) hhmm(p.quietEnd, "quiet hours end");
+  if (p.overdueAlerts !== undefined && typeof p.overdueAlerts !== "boolean") bad("overdue alerts must be on or off");
+  if (p.slots !== undefined) {
+    if (!p.slots || typeof p.slots !== "object" || Array.isArray(p.slots)) bad("slots must be an object");
+    const slots = p.slots as Record<string, unknown>;
+    const severities = Object.keys(SLOTS_PER_SEVERITY);
+    for (const k of Object.keys(slots)) if (!severities.includes(k)) bad(`unknown Severity ${k}`);
+    for (const [sev, n] of Object.entries(SLOTS_PER_SEVERITY)) {
+      const list = slots[sev];
+      if (!Array.isArray(list) || list.length !== n) bad(`${sev} needs ${n} slot${n === 1 ? "" : "s"}`);
+      for (const s of list as unknown[]) hhmm(s, "slot");
+    }
+  }
+}
+
+export interface PushSubscriptionInput {
+  deviceId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+const B64URL_RE = /^[A-Za-z0-9_-]+={0,2}$/;
+
+export function validateDeviceId(deviceId: unknown): string {
+  if (typeof deviceId !== "string" || !ID_RE.test(deviceId)) throw new UserError("ValidationError", "bad device id");
+  return deviceId;
+}
+
+/** A browser PushSubscription as sent by the Enable step. The Notifier POSTs to `endpoint`, so it must be https. */
+export function validatePushSubscription(input: PushSubscriptionInput): PushSubscriptionInput {
+  const deviceId = validateDeviceId(input.deviceId);
+  const { endpoint, p256dh, auth } = input;
+  let url: URL | undefined;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    // falls through to the check below
+  }
+  if (url?.protocol !== "https:" || endpoint.length > 2048) throw new UserError("ValidationError", "bad push endpoint");
+  for (const [k, max] of [[p256dh, 200], [auth, 100]] as const) {
+    if (typeof k !== "string" || !B64URL_RE.test(k) || k.length > max) throw new UserError("ValidationError", "bad push key");
+  }
+  return { deviceId, endpoint, p256dh, auth };
 }

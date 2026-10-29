@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { registerPasskey } from "../auth";
+import { readAlertPrefs } from "@aubi/shared";
 import { saveProfile, useStore } from "../store";
+import { NotificationsStep } from "./Notifications";
 
 export const COLORS = ["#2f7d4f", "#c2410c", "#7c3aed", "#0e7490", "#be185d", "#a16207"];
 
@@ -10,7 +12,7 @@ export function Setup() {
   const [name, setName] = useState(me.displayName ?? me.username[0].toUpperCase() + me.username.slice(1));
   const [color, setColor] = useState(me.color ?? COLORS[me.username === "aubyn" ? 4 : 0]);
   const [theme, setTheme] = useState(me.theme ?? "system");
-  const [digestAt, setDigestAt] = useState(me.alertPrefs?.digestAt ?? "");
+  const [handoffAt, setHandoffAt] = useState(me.alertPrefs ? readAlertPrefs(me.alertPrefs).handoffAt : "");
   const [passkey, setPasskey] = useState<"idle" | "done" | "skipped">(localStorage.getItem("aubi.hasPasskey") ? "done" : "idle");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -31,7 +33,7 @@ export function Setup() {
     try {
       await saveProfile({
         displayName: name.trim(), color, theme,
-        alertPrefs: { ...(me.alertPrefs ?? {}), digestAt, overdueAlerts: true },
+        alertPrefs: { handoffAt, overdueAlerts: true },
         setupComplete: true,
       });
     } catch (e) {
@@ -59,7 +61,7 @@ export function Setup() {
         </div>
       </label>
       <label>Handoff time <span className="req">required</span>
-        <input type="time" value={digestAt} onChange={(e) => setDigestAt(e.target.value)} />
+        <input type="time" value={handoffAt} onChange={(e) => setHandoffAt(e.target.value)} />
         <small>Each day at this time you'll get a handoff: what got done, what's overdue, what's coming up.</small>
       </label>
       <div className="card">
@@ -72,8 +74,9 @@ export function Setup() {
           </>
         )}
       </div>
+      <NotificationsStep />
       {error && <p className="error">{error}</p>}
-      <button className="primary big" disabled={busy || !name.trim() || !digestAt || passkey === "idle"} onClick={finish}>
+      <button className="primary big" disabled={busy || !name.trim() || !handoffAt || passkey === "idle"} onClick={finish}>
         Get started
       </button>
     </div>

@@ -122,7 +122,7 @@ Client store
 Notifier (M4)
 - A new Notifier Lambda runs on a 15-minute EventBridge Scheduler and reuses the shared alert rules: `shouldDing`, `dingSlotsForDay`, `alertRecipients`, quiet hours.
 - Per user and item, notification state records the last ding so dings dedupe. Handoff state records each user's last Handoff time.
-- Web Push uses VAPID. The private key lives in SSM SecureString and only the notifier role can read it.
+- Web Push uses VAPID. The private key lives in SSM SecureString; only the notifier role and the key-provisioning function (for its crash-recovery path) can read it.
 - A new mutation stores a user's push subscription. Payloads carry a deep link and a "Mark done" action that calls the existing completeItem.
 - A service worker handles push, notification actions and the offline app-shell cache.
 - Alert prefs (slots, quiet hours, Handoff time, overdue on/off) are edited in Settings and validated server-side.

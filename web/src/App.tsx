@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { isSignedIn, onAuthChange } from "./auth";
 import { loadConfig } from "./config";
+import { sendQueuedDeletes } from "./notifications";
 import { start, stop, useStore } from "./store";
 import { Login } from "./views/Login";
 import { Setup } from "./views/Setup";
@@ -23,6 +24,7 @@ export function App() {
     if (!configured || !signedIn) return;
     setStartError(undefined);
     start().catch((e) => setStartError(String(e.message ?? e)));
+    void sendQueuedDeletes(); // sign-out cleanup that was offline last time (story 25)
     return stop;
   }, [configured, signedIn]);
 

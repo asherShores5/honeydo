@@ -61,6 +61,7 @@ export interface AlertPrefs {
   slots: { low: string[]; medium: string[]; high: string[] };
   quietStart: string;
   quietEnd: string;
-  digestAt: string;
+  /** "HH:MM" Pacific: when this Member's Handoff is sent. Stored as `digestAt` before M4. */
+  handoffAt: string;
   overdueAlerts: boolean;
 }

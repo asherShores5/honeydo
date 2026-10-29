@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import {
-  CfnOutput, Duration, RemovalPolicy, Stack, type StackProps,
+  CfnOutput, CustomResource, Duration, RemovalPolicy, Stack, type StackProps,
   aws_appsync as appsync,
   aws_budgets as budgets,
   aws_certificatemanager as acm,
@@ -16,6 +16,9 @@ import {
   aws_route53_targets as targets,
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
+  aws_scheduler as scheduler,
+  aws_scheduler_targets as schedulerTargets,
+  custom_resources as cr,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 
@@ -25,7 +28,38 @@ const OLD_DOMAIN: string | undefined = undefined;
 export const ZONE = { hostedZoneId: "Z03837921G383RCR4HG5", zoneName: "ashershores.com" };
 export const USERNAMES = ["asher", "aubyn"];
 const BUDGET_EMAIL = "asher.shores5@gmail.com";
+/**
+ * Web Push VAPID key pair, created on the first deploy by the VapidKeys custom resource in AppStack
+ * (CloudFormation can't create a SecureString) and never overwritten. The public key goes to the
+ * client in config.json; only the Notifier role and the VapidKeys function (for crash recovery)
+ * can read the private one.
+ */
+export const VAPID_PARAMS = { private: "/aubi-honey/vapid/private", public: "/aubi-honey/vapid/public" };
 const ROOT = path.join(__dirname, "..", "..");
+
+/** Settings every Lambda here shares: bundled from the monorepo, Node 22 on ARM, two-week logs. */
+function lambdaFn(
+  scope: Construct,
+  id: string,
+  props: { entry: string; format: nodejs.OutputFormat; sourceMap?: boolean } & Omit<nodejs.NodejsFunctionProps, "entry" | "bundling" | "logGroup">,
+) {
+  const { entry, format, sourceMap, ...rest } = props;
+  return new nodejs.NodejsFunction(scope, id, {
+    entry: path.join(ROOT, "api", "src", entry),
+    projectRoot: ROOT,
+    depsLockFilePath: path.join(ROOT, "package-lock.json"),
+    runtime: lambda.Runtime.NODEJS_22_X,
+    architecture: lambda.Architecture.ARM_64,
+    bundling: { minify: true, sourceMap, format, target: "node22" },
+    logGroup: new logs.LogGroup(scope, `${id.replace(/Fn$/, "")}Logs`, { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+    ...rest,
+  });
+}
+
+/** ARNs of the two VAPID parameters. */
+function vapidParamArns(stack: Stack) {
+  return [VAPID_PARAMS.private, VAPID_PARAMS.public].map((name) => `arn:aws:ssm:${stack.region}:${stack.account}:parameter${name}`);
+}
 
 /** CloudFront certificates must live in us-east-1. */
 export class CertStack extends Stack {
@@ -49,6 +83,9 @@ interface AppStackProps extends StackProps {
 }
 
 export class AppStack extends Stack {
+  /** The role the Notifier Lambda runs as (m4/04); it reads the VAPID private key to sign pushes. */
+  readonly notifierRole: iam.Role;
+
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
 
@@ -95,17 +132,13 @@ export class AppStack extends Stack {
     });
 
     // ---- API ----
-    const fn = new nodejs.NodejsFunction(this, "ApiFn", {
-      entry: path.join(ROOT, "api", "src", "handler.ts"),
-      projectRoot: ROOT,
-      depsLockFilePath: path.join(ROOT, "package-lock.json"),
-      runtime: lambda.Runtime.NODEJS_22_X,
-      architecture: lambda.Architecture.ARM_64,
+    const fn = lambdaFn(this, "ApiFn", {
+      entry: "handler.ts",
+      format: nodejs.OutputFormat.ESM,
+      sourceMap: true,
       memorySize: 256,
       timeout: Duration.seconds(10),
       environment: { TABLE_NAME: table.tableName, ALLOWED_USERNAMES: USERNAMES.join(",") },
-      bundling: { minify: true, sourceMap: true, format: nodejs.OutputFormat.ESM, target: "node22" },
-      logGroup: new logs.LogGroup(this, "ApiLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
     });
     table.grantReadWriteData(fn);
 
@@ -119,7 +152,10 @@ export class AppStack extends Stack {
     });
     const ds = api.addLambdaDataSource("ApiDs", fn);
     for (const field of ["me", "snapshot", "completions"]) ds.createResolver(`Q${field}`, { typeName: "Query", fieldName: field });
-    for (const field of ["putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile"]) {
+    for (const field of [
+      "putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile",
+      "putPushSubscription", "deletePushSubscription",
+    ]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }
     // Private items never fan out to the partner (SPEC §4.5), except the one change that makes a
@@ -142,6 +178,77 @@ export function response(ctx) {
   return null;
 }`),
     });
+
+    // ---- notifier (M4) ----
+    // The Notifier Lambda runs as this role. It and the key-provisioning function (VapidKeysFn,
+    // below) are the only principals granted the VAPID private key; the API Lambda gets no SSM access.
+    // The key is a SecureString under the AWS-managed aws/ssm key, which SSM decrypts for any
+    // principal allowed GetParameter, so no kms:Decrypt statement is needed.
+    const notifierRole = (this.notifierRole = new iam.Role(this, "NotifierRole", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")],
+    }));
+    notifierRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: vapidParamArns(this),
+      }),
+    );
+    // Bundled as CJS: web-push is CommonJS and calls require("crypto"), which ESM output can't do.
+    const notifier = lambdaFn(this, "NotifierFn", {
+      entry: "notifier.ts",
+      format: nodejs.OutputFormat.CJS,
+      sourceMap: true,
+      memorySize: 256,
+      timeout: Duration.seconds(60),
+      role: notifierRole,
+      // No reserved concurrency: claim-before-send already makes overlapping runs send each push
+      // once, and a reserve fails to deploy on accounts with a low concurrency limit.
+      environment: {
+        TABLE_NAME: table.tableName,
+        VAPID_PRIVATE_PARAM: VAPID_PARAMS.private,
+        VAPID_PUBLIC_PARAM: VAPID_PARAMS.public,
+        VAPID_SUBJECT: `mailto:${BUDGET_EMAIL}`,
+      },
+    });
+    // Only what notifier.ts calls: Query to load, UpdateItem to claim, DeleteItem to prune.
+    table.grant(notifier, "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:DeleteItem");
+    // A UTC cron at :00/:15/:30/:45 lines runs up with the HH:MM Slots (a rate would start at
+    // deploy time, e.g. :07). Pacific offsets are whole hours, so UTC quarter-hours work all year.
+    new scheduler.Schedule(this, "NotifierEvery15", {
+      description: "Honey Do Notifier: overdue Dings and Handoffs",
+      schedule: scheduler.ScheduleExpression.cron({ minute: "0/15" }),
+      target: new schedulerTargets.LambdaInvoke(notifier, { retryAttempts: 0 }),
+    });
+
+    // ---- VAPID key pair (M4): created by the deploy, never overwritten, kept when the stack goes ----
+    // Logic and tests in api/src/vapid.ts. The private key stays in SSM: the resource returns only
+    // the public key, which config.json reads from it (a GetAtt, so the keys exist before config.json).
+    const vapidFn = lambdaFn(this, "VapidKeysFn", {
+      entry: "vapidKeysProvider.ts",
+      format: nodejs.OutputFormat.ESM,
+      timeout: Duration.seconds(30),
+      environment: { VAPID_PRIVATE_PARAM: VAPID_PARAMS.private, VAPID_PUBLIC_PARAM: VAPID_PARAMS.public },
+    });
+    // GetParameter covers the private key too, on purpose: vapid.ts reads it only to rebuild a
+    // missing public key after a crash between its two writes. Narrowing it would kill that path.
+    // No KMS statement: the AWS-managed aws/ssm key's own policy lets SSM encrypt and decrypt for
+    // any principal in the account that is allowed the SSM call.
+    vapidFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: vapidParamArns(this),
+      }),
+    );
+    const vapidKeys = new CustomResource(this, "VapidKeys", {
+      resourceType: "Custom::VapidKeys",
+      serviceToken: new cr.Provider(this, "VapidKeysProvider", {
+        onEventHandler: vapidFn,
+        logGroup: new logs.LogGroup(this, "VapidKeysProviderLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+      }).serviceToken,
+    });
+    // The Notifier (and its schedule, which references it) only comes up once the keys exist.
+    notifier.node.addDependency(vapidKeys);
 
     // ---- web hosting ----
     const zone = route53.HostedZone.fromHostedZoneAttributes(this, "Zone", ZONE);
@@ -195,6 +302,9 @@ export function response(ctx) {
           clientId: client.userPoolClientId,
           graphqlUrl: api.graphqlUrl,
           usernames: USERNAMES,
+          // From the VapidKeys resource, not an SSM reference: CloudFormation resolves SSM references
+          // before any resource runs, so on the first deploy the parameter wouldn't exist yet.
+          vapidPublicKey: vapidKeys.getAttString("publicKey"),
         }),
       ],
       // Vite assets are content-hashed; no-cache just forces cheap revalidation of index/config.

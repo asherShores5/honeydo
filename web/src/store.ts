@@ -1,18 +1,25 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { Item } from "@aubi/shared";
+import type { AlertPrefs, Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
+import { currentUsername } from "./auth";
 import { applyItemChange, type ItemChange } from "./itemChange";
+import { showCachedFirst } from "./launch";
 import { keepPending, type ItemInput, type Op } from "./outbox";
 import { liveTags } from "./tags";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
-export interface AlertPrefsLite { digestAt?: string; overdueAlerts?: boolean; quietStart?: string; quietEnd?: string }
+/**
+ * Alert prefs as the server holds them. A save sends only the prefs being changed; the server
+ * patches them onto the stored ones. Read them with `readAlertPrefs`, which fills defaults and
+ * maps a cached pre-M4 `digestAt` to `handoffAt`.
+ */
+export type AlertPrefsPatch = Partial<AlertPrefs>;
 export interface SavedView { id: string; name: string; tags: string[]; who: Who }
 export type Who = "anyone" | "mine" | "partner" | "unassigned";
 export interface Profile {
   userId: string; username: string; displayName?: string; color?: string; theme?: string; density?: string;
-  defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsLite | null;
+  defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsPatch | null;
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
@@ -154,14 +161,25 @@ export async function refresh(serverCopyOf?: string) {
 let rt: Realtime | undefined;
 
 export async function start() {
-  const { me } = await gql(Q.me).catch((e) => {
-    if (state.me) return { me: null }; // offline launch with cache
-    throw e;
-  });
-  if (me) set({ me: profileIn(me) });
-  await refresh();
-  set({ ready: true });
-  void flush();
+  // Weak signal (story 34): with this Member's own cache, show it now and sync behind it.
+  const cached = showCachedFirst(state.me, currentUsername());
+  if (!cached && state.me) reset(); // someone else's cache: never show it
+  if (cached) set({ ready: true });
+  const sync = (async () => {
+    const { me } = await gql(Q.me).catch((e) => {
+      if (state.me) return { me: null }; // offline launch with cache
+      throw e;
+    });
+    if (me) set({ me: profileIn(me) });
+    await refresh();
+  })();
+  if (cached) {
+    void sync.then(flush).catch((e) => toast(`Couldn't sync: ${(e as Error).message}`));
+  } else {
+    await sync;
+    set({ ready: true });
+    void flush();
+  }
 
   rt = new Realtime(() => void refresh(), (live) => set({ live }));
   rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
@@ -179,10 +197,17 @@ export async function start() {
   window.addEventListener("offline", () => set({ online: false }));
 }
 
+/** Drop everything held for the last Member, in memory too, so the next sign-in starts clean. */
+function reset() {
+  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], online: navigator.onLine, live: false, outbox: [] };
+  listeners.forEach((l) => l());
+}
+
 export function stop() {
   rt?.close();
   localStorage.removeItem(CACHE);
   localStorage.removeItem(OUTBOX);
+  reset();
 }
 
 // ---- outbox ----------------------------------------------------------------

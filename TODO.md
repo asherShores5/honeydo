@@ -13,7 +13,7 @@ Roadmap detail lives in [PROGRESS.md](PROGRESS.md) and [SPEC.md](SPEC.md) §9.
 ## M4 Notifications (next)
 - [ ] Service worker (push handler + offline app-shell cache)
 - [ ] Push subscription UI in Setup/Settings (iOS: home-screen app, user tap)
-- [ ] VAPID keys in SSM SecureString
+- [x] VAPID keys in SSM SecureString (created by the deploy, no manual step)
 - [ ] Notifier Lambda on EventBridge Scheduler (15 min) using `shared/alerts.ts` `shouldDing`
 - [ ] Per-user/per-item alert state (`NSTATE#`) to dedupe dings
 - [ ] Handoff push at each user's Handoff time (`digestAt`)

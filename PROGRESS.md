@@ -92,6 +92,8 @@ The biggest piece of the original wishlist that's still missing.
 - **Setup:** one-tap "Enable notifications" (iOS requires the home-screen app and a tap).
 - **Actions:** tap a notification to open the chore, with a "Mark done" button.
 - **Offline launch:** the app also opens with no signal at all.
+- **Push keys:** the deploy creates the VAPID key pair in SSM on its first run and never
+  replaces it. No manual step or local AWS credentials needed.
 - Cost impact: about $0.
 
 ### 2. Async comms, the rest (M2)
