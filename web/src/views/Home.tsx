@@ -5,8 +5,9 @@ import { ago, span } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
 import { Settings } from "./Settings";
+import { finishedTasks } from "../finished";
 
-type Tab = "ontrack" | "overdue" | "activity";
+type Tab = "ontrack" | "overdue" | "finished" | "activity";
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -72,6 +73,9 @@ export function Home() {
     };
   }, [items, selected, tags, who, me.userId, now]);
 
+  // Done Archives a Task; this tab is how you get back to it and its History.
+  const finished = useMemo(() => finishedTasks(Object.values(items)), [items]);
+
   function toggle(id: string) {
     const s = new Set(selected);
     s.has(id) ? s.delete(id) : s.add(id);
@@ -101,10 +105,11 @@ export function Home() {
       <nav className="tabs">
         <button className={tab === "ontrack" ? "on" : ""} onClick={() => setTab("ontrack")}>On track <b>{visible.ontrack.length}</b></button>
         <button className={tab === "overdue" ? "on red" : "red"} onClick={() => setTab("overdue")}>Overdue <b>{visible.overdue.length}</b></button>
+        <button className={tab === "finished" ? "on" : ""} onClick={() => setTab("finished")}>Finished</button>
         <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
       </nav>
 
-      {tab !== "activity" && (
+      {(tab === "ontrack" || tab === "overdue") && (
         <div className="filters">
           <button className={`chip ${filterCount ? "on" : ""}`} onClick={() => setShowFilters(!showFilters)}>
             Filter{filterCount ? ` · ${filterCount}` : ""} {showFilters ? "▴" : "▾"}
@@ -143,6 +148,19 @@ export function Home() {
                 <b>{nameOf(e.by)}</b> {e.type} <i>{e.title}</i>
                 {e.detail && <q>{e.detail}</q>}
                 <time>{ago(e.at, now)}</time>
+              </li>
+            ))}
+          </ul>
+        ) : tab === "finished" ? (
+          <ul className="items">
+            {finished.length === 0 && <li className="empty">No finished tasks yet.</li>}
+            {finished.map((i) => (
+              <li key={i.id} className="item done">
+                <button className="body" onClick={() => setEditing(i)}>
+                  <span className="dot" aria-label={LABEL.done} />
+                  <span className="title">{i.title}{i.visibility !== "shared" && <span title="Private"> 🔒</span>}</span>
+                  <span className="meta">done {ago(i.lastDoneAt!, now)}{i.lastDoneBy ? ` by ${nameOf(i.lastDoneBy)}` : ""}</span>
+                </button>
               </li>
             ))}
           </ul>
