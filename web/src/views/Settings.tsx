@@ -51,7 +51,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
             {["cards", "compact"].map((d) => <button key={d} className={(me.density ?? "cards") === d ? "on" : ""} onClick={() => patch({ density: d })}>{d}</button>)}
           </div>
         </label>
-        <label>Daily summary time
+        <label>Handoff time
           <input type="time" value={digestAt} onChange={(e) => setDigestAt(e.target.value)}
             onBlur={() => digestAt && patch({ alertPrefs: { ...(me.alertPrefs ?? {}), digestAt } })} />
         </label>
