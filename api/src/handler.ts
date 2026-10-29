@@ -100,7 +100,22 @@ function profileOut(rec: Record<string, unknown>) {
  * before this change and can't now; the subscription filter delivers it to them as a removal.
  */
 function change(rec: Record<string, unknown>, removedFor: string[] = []) {
+  if (removedFor.length) return redactedChange(rec, removedFor);
   return { item: itemOut(rec), visibility: rec.visibility as string, removedFor };
+}
+
+/**
+ * The envelope for a change that hides an item from someone. AppSync fans out the mutation's
+ * return value to every matching subscriber, so it carries none of the item's content: only id,
+ * version and visibility are real, and the schema's other required fields get placeholders.
+ * Members in removedFor drop the item; anyone else who gets it refreshes to fetch the real copy.
+ */
+function redactedChange(rec: Record<string, unknown>, removedFor: string[]) {
+  const item = {
+    id: rec.id, version: rec.version, visibility: rec.visibility,
+    kind: "task", title: "", tags: [], archived: false, createdBy: "", createdAt: 0, updatedAt: 0, recurrence: null,
+  };
+  return { item, visibility: rec.visibility as string, removedFor, redacted: true };
 }
 
 async function getItemFor(ctx: Ctx, id: string) {
