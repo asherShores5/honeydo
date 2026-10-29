@@ -158,6 +158,26 @@ export class AppStack extends Stack {
     ]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }
+    // ---- Comments (M2) ----
+    ds.createResolver("Qcomments", { typeName: "Query", fieldName: "comments" });
+    ds.createResolver("MaddComment", { typeName: "Mutation", fieldName: "addComment" });
+    // A Comment fans out under its Item's Visibility, so a Comment on a Private item reaches its
+    // owner only. Mirrored by commentDeliveredTo() in api/src/testing/harness.ts; keep in step.
+    api.addNoneDataSource("NoneComments").createResolver("SubComments", {
+      typeName: "Subscription",
+      fieldName: "onCommentChange",
+      runtime: appsync.FunctionRuntime.JS_1_0_0,
+      code: appsync.Code.fromInline(`
+import { util, extensions } from "@aws-appsync/utils";
+export function request() { return { payload: null }; }
+export function response(ctx) {
+  extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter({
+    visibility: { in: ["shared", "private:" + ctx.identity.sub] },
+  }));
+  return null;
+}`),
+    });
+
     // Private items never fan out to the partner (SPEC §4.5), except the one change that makes a
     // shared item Private: it names the partner in removedFor so their phone drops it live.
     // Mirrored by deliveredTo() in api/src/testing/harness.ts; keep the two in step.

@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import type { AlertPrefs, Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { currentUsername } from "./auth";
+import { applyCommentChange, dropItemActivity, type Comment, type CommentChange } from "./comments";
 import { applyItemChange, type ItemChange } from "./itemChange";
 import { showCachedFirst } from "./launch";
 import { keepPending, type ItemInput, type Op } from "./outbox";
@@ -31,6 +32,8 @@ interface State {
   tags: Record<string, Tag>;
   profiles: Record<string, Profile>;
   feed: FeedEvent[];
+  /** Comments of Items opened this session, by Item ID. Not cached: the item screen reloads them. */
+  comments: Record<string, Comment[]>;
   online: boolean;
   live: boolean;
   outbox: Op[];
@@ -42,7 +45,7 @@ const OUTBOX = "aubi.outbox.v1";
 
 let state: State = {
   ready: false,
-  items: {}, tags: {}, profiles: {}, feed: [],
+  items: {}, tags: {}, profiles: {}, feed: [], comments: {},
   online: navigator.onLine, live: false,
   outbox: JSON.parse(localStorage.getItem(OUTBOX) ?? "[]"),
   ...JSON.parse(localStorage.getItem(CACHE) ?? "{}"),
@@ -111,6 +114,16 @@ function applyItem(change: ItemChange, ownResult = false) {
     refresh: () => void refresh().catch(() => {}),
   });
   if (items !== state.items) set({ items });
+  const me = state.me?.userId;
+  if (me && change.removedFor?.includes(me)) {
+    const { comments, feed } = dropItemActivity(state, change.item.id);
+    set({ comments, feed });
+  }
+}
+
+function applyComment(change: CommentChange) {
+  const next = applyCommentChange(state, change, state.items[change.comment.itemId]?.title);
+  if (next !== state) set({ comments: next.comments, feed: next.feed });
 }
 
 function applyTag(t: Tag) {
@@ -185,6 +198,7 @@ export async function start() {
   rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
   rt.subscribe(Q.onTagChange, (t) => t && applyTag(t));
   rt.subscribe(Q.onProfileChange, (p) => p && applyProfile(p));
+  rt.subscribe(Q.onCommentChange, (c) => c && applyComment(c));
   void rt.connect().catch(() => {});
 
   const resume = () => {
@@ -199,7 +213,7 @@ export async function start() {
 
 /** Drop everything held for the last Member, in memory too, so the next sign-in starts clean. */
 function reset() {
-  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], online: navigator.onLine, live: false, outbox: [] };
+  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], comments: {}, online: navigator.onLine, live: false, outbox: [] };
   listeners.forEach((l) => l());
 }
 
@@ -331,6 +345,21 @@ export async function saveProfile(patch: Partial<Profile>) {
 
 export async function loadCompletions(itemId: string) {
   return (await gql(Q.completions, { itemId, limit: 50 })).completions as { itemId: string; at: number; by: string; note?: string }[];
+}
+
+// ---- Comments (M2) ----------------------------------------------------------
+
+export async function loadComments(itemId: string) {
+  const list = (await gql(Q.comments, { itemId })).comments as Comment[];
+  set({ comments: { ...state.comments, [itemId]: list } });
+}
+
+/**
+ * Online only (no outbox): the caller shows the error and keeps the draft. Retrying with the same
+ * `id` (a new one per draft) can't post the Comment twice.
+ */
+export async function addComment(itemId: string, id: string, text: string) {
+  applyComment((await gql(Q.addComment, { itemId, id, text })).addComment);
 }
 
 export function nameOf(userId?: string) {

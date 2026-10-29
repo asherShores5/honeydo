@@ -126,10 +126,27 @@ type PushDevice {
   enabled: Boolean!
 }
 
+"A short note on one Item (M2). Append-only; it follows its Item's Visibility."
+type Comment {
+  id: ID!
+  itemId: ID!
+  at: Float!
+  by: String!
+  text: String!
+}
+
+"addComment fans out to subscribers through this envelope. visibility is the Item's when written."
+type CommentChange {
+  comment: Comment!
+  visibility: String!
+}
+
 type Query {
   me: Profile!
   snapshot: Snapshot!
   completions(itemId: ID!, limit: Int): [Completion!]!
+  "The Item's Comments, oldest first. NotFound if the caller can't see the Item."
+  comments(itemId: ID!): [Comment!]!
 }
 
 type Mutation {
@@ -144,10 +161,13 @@ type Mutation {
   putPushSubscription(deviceId: ID!, endpoint: String!, p256dh: String!, auth: String!): PushDevice!
   "Turn notifications off on this device."
   deletePushSubscription(deviceId: ID!): PushDevice!
+  "Add a Comment. The client picks id, so a retry with the same id writes nothing twice."
+  addComment(itemId: ID!, id: ID!, text: String!): CommentChange!
 }
 
 type Subscription {
   onItemChange: ItemChange @aws_subscribe(mutations: ["putItem", "completeItem", "undoCompletion"])
   onTagChange: Tag @aws_subscribe(mutations: ["putTag", "deleteTag"])
   onProfileChange: Profile @aws_subscribe(mutations: ["putProfile"])
+  onCommentChange: CommentChange @aws_subscribe(mutations: ["addComment"])
 }
