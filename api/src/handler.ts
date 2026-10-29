@@ -584,9 +584,10 @@ async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
 const NOTE_TO_TASK_RESOLVERS = { markNoteTasked };
 
 // ---- Comments (M2) ---------------------------------------------------------
-// A Comment is append-only and belongs to one Item. It has no Visibility of its own: it is read
-// through its Item (getItemFor), so it follows the Item's current Visibility. An Item that goes
-// Private takes its old Comments with it, and they come back if it is shared again.
+// A Comment is append-only and belongs to one Item. It is stamped with its Item's Visibility when
+// written, and a Member sees it only if both that stamp and the Item's current Visibility allow
+// (story 36). An Item that goes Private takes its old Comments with it, and its shared ones come
+// back if it is shared again; a Comment written while Private stays with its writer for good.
 
 const COMMENT_MAX = 1000;
 
@@ -595,18 +596,31 @@ function commentOut(rec: Record<string, unknown>) {
   return { id, itemId, at, by, text };
 }
 
+/** A Comment's stamp. Comments written before stamping followed their Item only, as if shared. */
+const commentStamp = (rec: Record<string, unknown>) => (rec.visibility as string | undefined) ?? "shared";
+
+/**
+ * The one Visibility that lets in exactly the Members both `a` and `b` let in, for the
+ * onCommentChange filter. Two different Members' Private gives "private:", which no one matches.
+ */
+function narrower(a: string, b: string) {
+  if (a === b || b === "shared") return a;
+  return a === "shared" ? b : "private:";
+}
+
 /** The Comments on one Item the caller can see, oldest first. */
 async function comments(ctx: Ctx, args: { itemId: string }) {
   await getItemFor(ctx, args.itemId);
-  const recs = await queryPrefix(commentKey(args.itemId, ""));
+  const recs = (await queryPrefix(commentKey(args.itemId, ""))).filter((c) => canSee(commentStamp(c), ctx.userId));
   return recs.sort((a, b) => (a.at as number) - (b.at as number)).map(commentOut);
 }
 
 /**
  * Add a Comment and its Activity entry. The client picks the ID, so a retry after a lost response
  * writes nothing twice and returns the stored Comment. The CommentChange envelope carries the
- * Item's Visibility for the onCommentChange filter; the write is conditional on the Item still
- * having that Visibility, so a Comment can't be published as shared after the Item went Private.
+ * Item's Visibility (the Comment's stamp) for the onCommentChange filter; the write is conditional
+ * on the Item still having that Visibility, so a Comment can't be published as shared after the
+ * Item went Private. A replay publishes under the narrower of the stamp and the Item's Visibility now.
  */
 async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: string }) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(args.id ?? "")) throw new UserError("ValidationError", "bad comment id");
@@ -614,7 +628,7 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
   if (!text || text.length > COMMENT_MAX) throw new UserError("ValidationError", "comment must be 1-1000 characters");
   const item = await getItemFor(ctx, args.itemId);
   const key = { PK, SK: commentKey(args.itemId, args.id) };
-  const rec = { ...key, id: args.id, itemId: args.itemId, at: Date.now(), by: ctx.userId, text };
+  const rec = { ...key, id: args.id, itemId: args.itemId, at: Date.now(), by: ctx.userId, text, visibility: item.visibility };
   const written = await ddb
     .send(
       new TransactWriteCommand({
@@ -639,7 +653,7 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
   const now = await getItemFor(ctx, args.itemId);
   if (!stored) throw new UserError("ConflictError", "item changed, retry");
   if (stored.by !== ctx.userId) throw new UserError("ConflictError", "comment id taken");
-  return { comment: commentOut(stored), visibility: now.visibility as string };
+  return { comment: commentOut(stored), visibility: narrower(commentStamp(stored), now.visibility as string) };
 }
 
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { harness, noteDeliveredTo } from "./testing/harness";
+import { harness } from "./testing/harness";
 
 // m2/03: a Note turned into a Task stays on the Fridge, marked with the Task it became.
 const h = harness();
@@ -28,7 +28,7 @@ describe("markNoteTasked", () => {
     await noteAndTask();
     const note = await h.call(h.B, "markNoteTasked", { id: "n1", taskId: "t1" });
     expect(note).toMatchObject({ id: "n1", text: "We're out of diapers", taskId: "t1", updatedAt: NOW + 2000 });
-    expect(noteDeliveredTo(note, h.A)).toBe(true);
+    expect(h.visibilityDeliveredTo(note, h.A)).toBe(true);
     const { notes } = await h.call(h.A, "snapshot");
     expect(notes).toEqual([note]);
   });
