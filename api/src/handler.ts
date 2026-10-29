@@ -9,16 +9,13 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
-import { readAlertPrefs, type Item } from "@aubi/shared";
+import { fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
-  UserError, canSee, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
-  type ItemInput, type PushSubscriptionInput,
+  UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
+  validateNoteExpiry, validateNoteId, validateNoteInput, validateTaskId,
+  type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
-import { PK, commentKey, ifConditionFailed, pushKey } from "./table";
-import { fridgeNotes, type Note } from "@aubi/shared";
-import { validateNoteExpiry, validateNoteId, validateNoteInput, type NoteInput } from "./rules";
-import { noteKey } from "./table";
-import { validateTaskId } from "./rules";
+import { PK, commentKey, ifConditionFailed, noteKey, pushKey } from "./table";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
@@ -105,8 +102,15 @@ function profileOut(rec: Record<string, unknown>) {
   const p = strip<Record<string, unknown>>(rec);
   for (const k of ["defaultView", "savedViews", "alertPrefs"]) p[k] = p[k] ?? null;
   if (p.alertPrefs) p.alertPrefs = readAlertPrefs(p.alertPrefs);
-  p.activitySeenAt = p.activitySeenAt ?? null;
+  // Own-only fields: the partner reads this Profile (snapshot, onProfileChange), so they are
+  // always null here and only `me` fills them in (ownProfileOut).
+  p.activitySeenAt = null;
   return p;
+}
+
+/** The caller's own Profile, with the fields only they may read. */
+function ownProfileOut(rec: Record<string, unknown>): Record<string, unknown> {
+  return { ...profileOut(rec), activitySeenAt: rec.activitySeenAt ?? null };
 }
 
 /**
@@ -190,10 +194,10 @@ function itemUpdate(itemId: string, set: Record<string, unknown>, remove: string
 async function me(ctx: Ctx) {
   const key = { PK, SK: `USER#${ctx.userId}` };
   const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: key }));
-  if (r.Item) return profileOut(r.Item);
+  if (r.Item) return ownProfileOut(r.Item);
   const rec = { ...key, userId: ctx.userId, username: ctx.username, setupComplete: false, updatedAt: Date.now() };
   await ddb.send(new PutCommand({ TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" })).catch(() => {});
-  return profileOut(rec);
+  return ownProfileOut(rec);
 }
 
 async function snapshot(ctx: Ctx) {
@@ -420,12 +424,6 @@ async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
   if (fields.alertPrefs && current.alertPrefs) {
     fields.alertPrefs = { ...(current.alertPrefs as object), ...(fields.alertPrefs as object) };
   }
-  // Activity last seen only moves forward and never past the server's now: a stale device can't
-  // bring old events back as unread, and a fast device clock can't hide events still to come.
-  if (fields.activitySeenAt !== undefined) {
-    const stored = typeof current.activitySeenAt === "number" ? current.activitySeenAt : 0;
-    fields.activitySeenAt = Math.max(stored, Math.min(fields.activitySeenAt as number, Date.now()));
-  }
   const names = Object.keys(fields);
   const r = await ddb.send(
     new UpdateCommand({
@@ -463,6 +461,30 @@ async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
   const deviceId = validateDeviceId(args.deviceId);
   await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: pushKey(ctx.userId, deviceId) } }));
   return { deviceId, enabled: false };
+}
+
+/**
+ * Save when the caller last opened Activity; returns the stored time. Its own mutation, not a
+ * putProfile field, because onProfileChange fans putProfile out to the partner. It only moves
+ * forward and never past the server's now: a stale device can't bring old events back as unread,
+ * and a fast device clock can't hide events still to come.
+ */
+async function markActivitySeen(ctx: Ctx, args: { at: number }) {
+  const at = Math.min(validateActivitySeenAt(args.at), Date.now());
+  await me(ctx); // the Profile record exists
+  const r = await ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK, SK: `USER#${ctx.userId}` },
+        UpdateExpression: "SET activitySeenAt = :at",
+        ConditionExpression: "attribute_not_exists(activitySeenAt) OR activitySeenAt < :at",
+        ExpressionAttributeValues: { ":at": at },
+        ReturnValues: "ALL_NEW",
+      }),
+    )
+    .then((r) => r.Attributes, ifConditionFailed(undefined));
+  return (r ?? (await me(ctx))).activitySeenAt;
 }
 
 // ---- Fridge Notes (m2/02) ---------------------------------------------------
@@ -658,7 +680,7 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
 
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
-  putPushSubscription, deletePushSubscription,
+  putPushSubscription, deletePushSubscription, markActivitySeen,
   ...FRIDGE_RESOLVERS,
   ...NOTE_TO_TASK_RESOLVERS,
   comments, addComment,

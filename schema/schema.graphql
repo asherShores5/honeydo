@@ -77,7 +77,7 @@ type Profile {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
-  "When the Member last opened Activity (ms). Only moves forward; capped at the server's now."
+  "Own only: when the Member last opened Activity (ms), set by markActivitySeen. Filled on `me`; null on any Profile the partner can read."
   activitySeenAt: Float
   setupComplete: Boolean!
   updatedAt: Float!
@@ -91,8 +91,6 @@ input ProfileInput {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
-  "When the Member last opened Activity (ms). Only moves forward; capped at the server's now."
-  activitySeenAt: Float
   setupComplete: Boolean
 }
 
@@ -185,6 +183,8 @@ type Mutation {
   putPushSubscription(deviceId: ID!, endpoint: String!, p256dh: String!, auth: String!): PushDevice!
   "Turn notifications off on this device."
   deletePushSubscription(deviceId: ID!): PushDevice!
+  "Save when I last opened Activity (ms); returns the stored time. Only moves forward, capped at the server's now. No subscription listens to it, so the partner never sees it."
+  markActivitySeen(at: Float!): Float!
   "Add a Comment. The client picks id, so a retry with the same id writes nothing twice."
   addComment(itemId: ID!, id: ID!, text: String!): CommentChange!
   "Post a Note on the Fridge. The id comes from the client, so a replay returns the stored Note."

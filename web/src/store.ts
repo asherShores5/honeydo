@@ -147,9 +147,13 @@ function applyTag(t: Tag) {
   void refresh().catch(() => {});
 }
 
+/** Fields only `me` carries; the server sends them null on any Profile the partner can also read. */
+const OWN_ONLY = ["activitySeenAt"] as const;
+
 function applyProfile(raw: any) {
   const p = profileIn(raw);
-  set({ profiles: { ...state.profiles, [p.userId]: p }, ...(state.me?.userId === p.userId ? { me: p } : {}) });
+  const mine = state.me?.userId === p.userId ? { ...p, ...Object.fromEntries(OWN_ONLY.map((k) => [k, state.me![k]])) } : undefined;
+  set({ profiles: { ...state.profiles, [p.userId]: p }, ...(mine ? { me: mine } : {}) });
 }
 
 /** `serverCopyOf`: take this item from the server even if it has pending ops (conflict replay). */
@@ -350,15 +354,16 @@ export async function saveProfile(patch: Partial<Profile>) {
 }
 
 /**
- * Opening Activity: clear the unread marker here at once, then save last seen to the Profile so
- * my other devices clear too. `at` is the newest entry's server time, so device clocks don't
+ * Opening Activity: clear the unread marker here at once, then save last seen so my other devices
+ * clear too when they next load `me`. Its own mutation, which nothing fans out, so the partner
+ * never learns when I read Activity. `at` is the newest entry's server time, so device clocks don't
  * matter. If the save fails (offline) the next open saves it again.
  */
 export function markActivitySeen(at: number) {
   const me = state.me;
   if (!me || (me.activitySeenAt ?? 0) >= at) return;
   set({ me: { ...me, activitySeenAt: at } });
-  void saveProfile({ activitySeenAt: at }).catch(() => {});
+  void gql(Q.markActivitySeen, { at }).catch(() => {});
 }
 
 export async function loadCompletions(itemId: string) {
