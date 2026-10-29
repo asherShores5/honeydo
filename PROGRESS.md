@@ -1,6 +1,6 @@
 # Aubi Honey: Progress & Next Steps
 
-_Updated 2026-10-20_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
+_Updated 2026-10-29_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
 
 ## Where things stand
 
@@ -32,7 +32,7 @@ when done, show green → yellow → red as they come due, and sync live between
 
 **Profiles**
 - Separate name, color, light/dark theme, and card/compact layout for each person.
-- Daily summary time is set during first-run setup. It will be used once notifications ship.
+- Handoff time is set during first-run setup. It will be used once notifications ship.
 
 **Sync & reliability**
 - Changes show up on the other phone in about a second.
@@ -72,11 +72,12 @@ Recommended order. Each step is roughly one working session.
 
 ### 0. Cleanup (small)
 
+The code is on GitHub in a public repo, by choice, and `prod` auto-deploys.
+
 | Item | Why | Needs approval? |
 |---|---|---|
-| Put the code in a private git repo (GitHub or other) | Nothing is backed up or version-controlled yet | Pick a host |
-| Delete test items and test Activity entries | Leftovers from launch testing | Yes |
-| Delete the old `aubi` certificate DNS record | Harmless leftover from the domain move | Yes |
+| Delete test items and test Activity entries | Leftovers from launch testing | Approved 2026-10-29 |
+| Delete the old `aubi` certificate DNS record | Harmless leftover from the domain move | Approved 2026-10-29 |
 | Turn on cost tracking for the `app` tag | The budget alert can only track app costs once AWS recognizes the tag (~24h after deploy) | No |
 | "Remove passkey" button in Settings | The old `aubi` passkey still shows in the count | No |
 
@@ -86,7 +87,7 @@ The biggest piece of the original wishlist that's still missing.
 - **Overdue dings:** while a chore is red, 1×/day by default, or 1/2/3× for low/medium/high
   severity. Quiet hours (default 9pm–7am) push dings to the morning. Assigned chores only ping
   the assignee.
-- **Daily summary** at each person's chosen time: what got done, what's overdue, what's coming
+- **Handoff** at each person's chosen time: what got done, what's overdue, what's coming
   up.
 - **Setup:** one-tap "Enable notifications" (iOS requires the home-screen app and a tap).
 - **Actions:** tap a notification to open the chore, with a "Mark done" button.
@@ -96,14 +97,14 @@ The biggest piece of the original wishlist that's still missing.
 ### 2. Async comms, the rest (M2)
 
 - Comments on chores ("used the last of the shampoo").
-- Message board for notes not tied to a chore (fridge whiteboard), with pins and expiry.
-- Daily handoff card inside the app.
+- Fridge: a shared whiteboard for notes not tied to a chore, with pins and expiry.
+- Handoff card inside the app.
 
 ### 3. More views (M5)
 
 - **Today:** chores grouped by morning / afternoon / evening / night.
 - **Calendar:** upcoming due dates and past completions.
-- **Board by tag:** e.g. columns for Nursery | Kitchen | Car.
+- **Tag board:** e.g. columns for Nursery | Kitchen | Car.
 - **History & stats:** who did what, and target vs. actual interval ("bath: every 3d target,
   3.4d actual").
 - Named saved views pinned as tabs, separate for each person.
@@ -117,9 +118,7 @@ The biggest piece of the original wishlist that's still missing.
 
 ## Decisions needed
 
-1. Where to host the code backup (GitHub private repo recommended).
-2. OK to delete the test data and the old DNS record?
-3. Any rough edges from real use that should jump the queue ahead of notifications?
+1. Any rough edges from real use that should jump the queue ahead of notifications?
 
 ---
 
