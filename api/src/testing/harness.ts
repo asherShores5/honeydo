@@ -48,11 +48,15 @@ export function appSyncEvent(member: Member, fieldName: string, args: Record<str
 
 /**
  * Whether an onItemChange subscriber receives this mutation result. Mirrors the subscription
- * filter in infra/lib/stacks.ts ("SubItems" resolver): visibility in ["shared", "private:<sub>"].
+ * filter in infra/lib/stacks.ts ("SubItems" resolver): visibility in ["shared", "private:<sub>"],
+ * or removedFor contains <sub> (an item that just went Private, delivered as a removal).
  * Mutations publish by returning the ItemChange envelope; there is no other publish path.
  */
-export function deliveredTo(change: { visibility: string }, member: Member) {
-  return ["shared", `private:${member.userId}`].includes(change.visibility);
+export function deliveredTo(change: { visibility: string; removedFor?: string[] | null }, member: Member) {
+  return (
+    ["shared", `private:${member.userId}`].includes(change.visibility) ||
+    (change.removedFor ?? []).includes(member.userId)
+  );
 }
 
 export function harness() {

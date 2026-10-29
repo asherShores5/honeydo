@@ -12,7 +12,7 @@ const ITEM = `id kind title notes tags assigneeId visibility severity recurrence
 const TAG = `id name group color order deleted updatedAt`;
 const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs setupComplete updatedAt`;
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
-const CHANGE = `item { ${ITEM} } visibility`;
+const CHANGE = `item { ${ITEM} } visibility removedFor`;
 
 export const Q = {
   me: `query { me { ${PROFILE} } }`,

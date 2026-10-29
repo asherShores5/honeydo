@@ -95,8 +95,12 @@ function profileOut(rec: Record<string, unknown>) {
   return p;
 }
 
-function change(rec: Record<string, unknown>) {
-  return { item: itemOut(rec), visibility: rec.visibility as string };
+/**
+ * The ItemChange envelope every subscriber gets. `removedFor` lists Members who could see the item
+ * before this change and can't now; the subscription filter delivers it to them as a removal.
+ */
+function change(rec: Record<string, unknown>, removedFor: string[] = []) {
+  return { item: itemOut(rec), visibility: rec.visibility as string, removedFor };
 }
 
 async function getItemFor(ctx: Ctx, id: string) {
@@ -208,7 +212,10 @@ async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: num
     throw e;
   });
   await feed(ctx, existing ? (fields.archived && !existing.archived ? "archived" : "edited") : "created", rec);
-  return change(rec);
+  const lostSight = existing
+    ? users.filter((u) => canSee(existing.visibility as string, u) && !canSee(fields.visibility, u))
+    : [];
+  return change(rec, lostSight);
 }
 
 async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null; note?: string | null }) {

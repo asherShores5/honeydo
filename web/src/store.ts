@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from "react";
 import type { Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
+import { applyItemChange } from "./itemChange";
 import { keepPending, type ItemInput, type Op } from "./outbox";
 
 export interface Tag { id: string; name: string; group: string; color?: string; order?: number; deleted?: boolean; updatedAt: number }
@@ -97,11 +98,9 @@ function profileIn(raw: any): Profile {
   });
 }
 
-function applyItem(raw: any) {
-  const item = itemIn(raw);
-  const cur = state.items[item.id];
-  if (cur && cur.version > item.version) return; // stale echo
-  set({ items: { ...state.items, [item.id]: item } });
+function applyItem(change: { item: any; removedFor?: string[] | null }) {
+  const items = applyItemChange(state.items, { ...change, item: itemIn(change.item) }, state.me?.userId);
+  if (items !== state.items) set({ items });
 }
 
 function applyTag(t: Tag) {
@@ -162,7 +161,7 @@ export async function start() {
   void flush();
 
   rt = new Realtime(() => void refresh(), (live) => set({ live }));
-  rt.subscribe(Q.onItemChange, (c) => c && applyItem(c.item));
+  rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
   rt.subscribe(Q.onTagChange, (t) => t && applyTag(t));
   rt.subscribe(Q.onProfileChange, (p) => p && applyProfile(p));
   void rt.connect().catch(() => {});
@@ -204,7 +203,7 @@ export async function flush() {
       const op = state.outbox[0];
       try {
         const change = await send(op);
-        applyItem(change.item);
+        applyItem(change);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         if (e.kind === "network") {
