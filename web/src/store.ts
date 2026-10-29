@@ -1,6 +1,6 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { AlertPrefs, Item } from "@aubi/shared";
+import type { AlertPrefs, Completion, Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { currentUsername } from "./auth";
 import { applyItemChange, type ItemChange } from "./itemChange";
@@ -331,6 +331,18 @@ export async function saveProfile(patch: Partial<Profile>) {
 
 export async function loadCompletions(itemId: string) {
   return (await gql(Q.completions, { itemId, limit: 50 })).completions as { itemId: string; at: number; by: string; note?: string }[];
+}
+
+/**
+ * The newest Completions of several items in one request: aliased copies of the visibility-checked
+ * `completions` read (the Handoff card's "done", m2/04). `limit` per item.
+ */
+export async function loadCompletionsOf(itemIds: string[], limit = 20): Promise<Completion[]> {
+  if (!itemIds.length) return [];
+  const vars = itemIds.map((_, n) => `$i${n}: ID!`).join(", ");
+  const reads = itemIds.map((_, n) => `c${n}: completions(itemId: $i${n}, limit: ${limit}) { itemId at by }`).join(" ");
+  const data = await gql<Record<string, Completion[]>>(`query(${vars}) { ${reads} }`, Object.fromEntries(itemIds.map((id, n) => [`i${n}`, id])));
+  return Object.values(data).flat();
 }
 
 export function nameOf(userId?: string) {

@@ -9,6 +9,7 @@ import { finishedTasks } from "../finished";
 import { openItem } from "../openItem";
 import { consumePendingItem, usePendingItem } from "../openRequests";
 import { OpenedItem } from "./OpenedItem";
+import { HandoffCard } from "./HandoffCard";
 
 type Tab = "ontrack" | "overdue" | "finished" | "activity";
 
@@ -119,6 +120,8 @@ export function Home() {
           {(me.displayName ?? me.username)[0].toUpperCase()}
         </button>
       </header>
+
+      <HandoffCard now={now} />
 
       <nav className="tabs">
         <button className={tab === "ontrack" ? "on" : ""} onClick={() => setTab("ontrack")}>On track <b>{visible.ontrack.length}</b></button>
