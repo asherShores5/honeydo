@@ -114,6 +114,8 @@ type Snapshot {
 type ItemChange {
   item: Item!
   visibility: String!
+  "Members who could see the item before this change and can't now. They drop it from their store."
+  removedFor: [String!]
 }
 
 type Query {
