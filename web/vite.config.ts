@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { precacheList, shellVersion, type BuildFile } from "./src/swShell";
+import { precacheList, shellVersion, type BuildFile } from "./src/swShell.ts";
 
 export default defineConfig({ plugins: [react(), serviceWorker()], build: { target: "es2022" } });
 
