@@ -7,14 +7,17 @@
 // read to `now`, and only the run that wins sends. A crash after the claim loses that one push
 // rather than risking a duplicate (SPEC story 26).
 //
-// m4/06 (Handoff) plugs in as a second job source: add its records to `load()` and append
-// `handoffJobs(snapshot, now)` in `runNotifier`. Claiming, sending and pruning are shared.
+// Two job sources share claiming, sending and pruning: overdue Dings (NSTATE#<itemId>#<sub>
+// records) and the daily Handoff (m4/06, HANDOFF#<sub> records).
 import { createHash } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
 import { DeleteCommand, DynamoDBDocumentClient, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import webpush from "web-push";
-import { dingPayload, planDings, readAlertPrefs, type DingState, type Item, type NotifyMember, type PushPayload } from "@aubi/shared";
+import {
+  dingPayload, handoffPayload, planDings, planHandoffs, readAlertPrefs,
+  type Completion, type DingState, type HandoffState, type Item, type NotifyMember, type PushPayload,
+} from "@aubi/shared";
 
 const TABLE = process.env.TABLE_NAME!;
 const PK = "HH#aubi";
@@ -113,17 +116,21 @@ interface Snapshot {
   items: Item[];
   members: NotifyMember[];
   dingStates: DingState[];
+  handoffStates: HandoffState[];
   subscriptions: Subscription[];
 }
 
 async function load(): Promise<Snapshot> {
-  const [items, profiles, nstate, push] = await Promise.all([
-    queryPrefix("ITEM#"), queryPrefix("USER#"), queryPrefix("NSTATE#"), queryPrefix("PUSH#"),
+  const [items, profiles, nstate, handoff, push] = await Promise.all([
+    queryPrefix("ITEM#"), queryPrefix("USER#"), queryPrefix("NSTATE#"), queryPrefix("HANDOFF#"), queryPrefix("PUSH#"),
   ]);
   return {
     items: items as unknown as Item[],
-    members: profiles.map((p) => ({ userId: p.userId as string, prefs: readAlertPrefs(p.alertPrefs) })),
+    members: profiles.map((p) => ({
+      userId: p.userId as string, prefs: readAlertPrefs(p.alertPrefs), name: (p.displayName ?? p.username) as string | undefined,
+    })),
     dingStates: nstate.map((s) => ({ itemId: s.itemId as string, userId: s.userId as string, lastAlertedAt: s.lastAlertedAt as number })),
+    handoffStates: handoff.map((s) => ({ userId: s.userId as string, lastHandoffAt: s.lastHandoffAt as number })),
     subscriptions: push.map((s) => ({
       SK: s.SK as string, userId: s.userId as string, endpoint: s.endpoint as string,
       keys: { p256dh: s.p256dh as string, auth: s.auth as string },
@@ -182,11 +189,39 @@ function dingJobs(snap: Snapshot, now: number): PushJob[] {
   }));
 }
 
+async function handoffJobs(snap: Snapshot, now: number): Promise<PushJob[]> {
+  // Completions are only read on the few runs where a Handoff is due (planned once without them).
+  if (!planHandoffs(snap.items, [], snap.members, snap.handoffStates, now).length) return [];
+  const completions = (await queryPrefix("DONE#")) as unknown as Completion[];
+  return planHandoffs(snap.items, completions, snap.members, snap.handoffStates, now).map((p) => ({
+    kind: "handoff",
+    userId: p.userId,
+    claim: () =>
+      ddb
+        .send(
+          new UpdateCommand({
+            TableName: TABLE,
+            Key: { PK, SK: `HANDOFF#${p.userId}` },
+            UpdateExpression: "SET userId = :u, lastHandoffAt = :now",
+            ConditionExpression:
+              p.seen === undefined ? "attribute_not_exists(lastHandoffAt)" : "attribute_not_exists(lastHandoffAt) OR lastHandoffAt = :seen",
+            ExpressionAttributeValues: { ":u": p.userId, ":now": now, ...(p.seen === undefined ? {} : { ":seen": p.seen }) },
+          }),
+        )
+        .then(() => true, ifConditionFailed(false)),
+    payload: handoffPayload(p.content),
+    // Stale by the next morning; a newer Handoff replaces an undelivered one.
+    options: { TTL: 12 * 3600, urgency: "normal", topic: "handoff" },
+  }));
+}
+
 // ---- run -------------------------------------------------------------------
 
 export interface RunSummary {
   /** Pushes claimed and sent this run (one per Member and Ding). */
   dings: number;
+  /** Handoffs claimed and sent this run (at most one per Member a day). */
+  handoffs: number;
   /** Device deliveries that succeeded / failed, and subscriptions deleted as gone. */
   sent: number;
   failed: number;
@@ -195,8 +230,8 @@ export interface RunSummary {
 
 export async function runNotifier(now = Date.now()): Promise<RunSummary> {
   const snap = await load();
-  const jobs = [...dingJobs(snap, now)];
-  const summary: RunSummary = { dings: 0, sent: 0, failed: 0, pruned: 0 };
+  const jobs = [...dingJobs(snap, now), ...(await handoffJobs(snap, now))];
+  const summary: RunSummary = { dings: 0, handoffs: 0, sent: 0, failed: 0, pruned: 0 };
   const gone = new Set<string>();
 
   for (const job of jobs) {
@@ -204,6 +239,7 @@ export async function runNotifier(now = Date.now()): Promise<RunSummary> {
     if (!devices.length) continue; // nothing to deliver to: leave the state unclaimed
     if (!(await job.claim())) continue;
     if (job.kind === "ding") summary.dings++;
+    else summary.handoffs++;
     const body = JSON.stringify(job.payload);
     await Promise.all(
       devices.map(async (sub) => {
