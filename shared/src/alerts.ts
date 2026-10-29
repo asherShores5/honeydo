@@ -1,13 +1,21 @@
-import type { AlertPrefs, Item, UserId } from "./types";
+import type { AlertPrefs, Item, Severity, UserId } from "./types";
 import { DAY, fromWall, parseHHMM, toWall } from "./time";
 import { schedule, status } from "./status";
 
 export const DEFAULT_ALERT_PREFS: AlertPrefs = {
+  // One Slot a day for low Severity, two for medium, three for high (SPEC §4.6).
   slots: { low: ["09:00"], medium: ["09:00", "17:00"], high: ["09:00", "13:00", "19:00"] },
   quietStart: "21:00",
   quietEnd: "07:00",
   handoffAt: "20:00",
   overdueAlerts: true,
+};
+
+/** Dings per day for each Severity, taken from the default Slots so the two can't disagree. */
+export const SLOTS_PER_SEVERITY: Readonly<Record<Severity, number>> = {
+  low: DEFAULT_ALERT_PREFS.slots.low.length,
+  medium: DEFAULT_ALERT_PREFS.slots.medium.length,
+  high: DEFAULT_ALERT_PREFS.slots.high.length,
 };
 
 /**

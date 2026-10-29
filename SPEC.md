@@ -272,7 +272,9 @@ Secrets Manager ($0.40/secret), and Cognito Plus tier. Set an AWS Budget alarm a
 - S3 is private behind CloudFront OAC, TLS only, strict CSP.
 - DynamoDB PITR for point-in-time restore; the table has `RemovalPolicy.RETAIN` and deletion
   protection.
-- VAPID private key is stored in SSM SecureString, readable only by the notifier role. The
+- VAPID private key is stored in SSM SecureString. Only two roles can read it: the notifier
+  role, and the key-provisioning function (VapidKeysFn), which reads it only to rebuild a
+  missing public key after a crash between its two writes. The
   deploy creates the pair itself (custom resource `VapidKeys` in AppStack, logic in
   `api/src/vapid.ts`): only if `/aubi-honey/vapid/private` is missing, never overwriting, and
   keeping both parameters if the stack is deleted. It returns only the public key, which

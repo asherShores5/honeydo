@@ -1,6 +1,6 @@
 // Which item a Ding's deep link opens, and whether it offers Done (m4/05). Pure; the URL and
 // worker-message parsing is in deepLink.ts and the view is views/OpenedItem.tsx.
-import { status, type Item, type UserId } from "@aubi/shared";
+import { canSee, status, type Item, type UserId } from "@aubi/shared";
 
 export interface OpenedItem {
   item: Item;
@@ -14,6 +14,6 @@ export interface OpenedItem {
  */
 export function openItem(itemId: string, items: Readonly<Record<string, Item>>, me: UserId, now: number): OpenedItem | undefined {
   const item = items[itemId];
-  if (!item || (item.visibility !== "shared" && item.visibility !== `private:${me}`)) return undefined;
+  if (!item || !canSee(item.visibility, me)) return undefined;
   return { item, canDone: !item.archived && status(item, now) !== "done" };
 }

@@ -3,6 +3,7 @@
 import type { Completion, Item, UserId } from "./types";
 import { schedule, status } from "./status";
 import type { NotifyMember, PushPayload } from "./notify";
+import { canSee } from "./visibility";
 import { DAY, fromWall, parseHHMM, toWall } from "./time";
 
 export interface HandoffDone {
@@ -48,7 +49,7 @@ export interface HandoffInput {
 
 export function buildHandoff({ userId, items, completions, names, since, until, now }: HandoffInput): HandoffContent {
   // The partner's Private items are dropped before anything else, so they're never counted or named.
-  items = items.filter((i) => i.visibility === "shared" || i.visibility === `private:${userId}`);
+  items = items.filter((i) => canSee(i.visibility, userId));
   const byId = new Map(items.map((i) => [i.id, i]));
   const done: HandoffDone[] = [];
   for (const c of completions) {

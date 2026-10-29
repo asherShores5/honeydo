@@ -1,14 +1,12 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import type { AlertPrefs, Chore, Item, Recurrence, Severity, Task } from "@aubi/shared";
+import { SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
+
+export { canSee } from "@aubi/shared";
 
 export class UserError extends Error {
   constructor(public type: "ValidationError" | "Forbidden" | "NotFound" | "ConflictError", message: string) {
     super(message);
   }
-}
-
-export function canSee(visibility: string, userId: string): boolean {
-  return visibility === "shared" || visibility === `private:${userId}`;
 }
 
 export interface ItemInput {
@@ -125,8 +123,6 @@ export function validateProfileInput(input: Record<string, unknown>) {
 }
 
 const ALERT_PREF_KEYS = ["slots", "quietStart", "quietEnd", "handoffAt", "overdueAlerts"];
-/** Dings per day for each Severity (SPEC §4.6). */
-const SLOTS_PER_SEVERITY: Record<Severity, number> = { low: 1, medium: 2, high: 3 };
 
 /**
  * Alert prefs as a Member saves them. Any key may be left out (stored defaults fill it on read),
