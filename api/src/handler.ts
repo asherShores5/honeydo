@@ -9,7 +9,7 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
-import type { Item } from "@aubi/shared";
+import { readAlertPrefs, type Item } from "@aubi/shared";
 import { UserError, canSee, validateItemInput, validateProfileInput, type ItemInput } from "./rules";
 
 const TABLE = process.env.TABLE_NAME!;
@@ -93,6 +93,7 @@ function itemOut(rec: Record<string, unknown>) {
 function profileOut(rec: Record<string, unknown>) {
   const p = strip<Record<string, unknown>>(rec);
   for (const k of ["defaultView", "savedViews", "alertPrefs"]) p[k] = p[k] ?? null;
+  if (p.alertPrefs) p.alertPrefs = readAlertPrefs(p.alertPrefs);
   return p;
 }
 
@@ -415,8 +416,13 @@ async function deleteTag(_ctx: Ctx, args: { id: string }) {
 }
 
 async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
-  await me(ctx); // ensure the record exists
+  const current = await me(ctx); // also ensures the record exists
   const fields = validateProfileInput(args.input);
+  // Alert prefs patch the stored ones, so toggling one pref (e.g. overdue alerts off) keeps the
+  // rest, the Handoff time included. Saving also rewrites a pre-M4 `digestAt` as `handoffAt`.
+  if (fields.alertPrefs && current.alertPrefs) {
+    fields.alertPrefs = { ...(current.alertPrefs as object), ...(fields.alertPrefs as object) };
+  }
   const names = Object.keys(fields);
   const r = await ddb.send(
     new UpdateCommand({

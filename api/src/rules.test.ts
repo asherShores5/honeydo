@@ -48,11 +48,11 @@ describe("recurrence parsing", () => {
 });
 
 describe("profile validation", () => {
-  it("setup requires a digest time", () => {
-    expect(() => validateProfileInput({ setupComplete: true })).toThrow(/summary time/);
-    expect(validateProfileInput({ setupComplete: true, alertPrefs: JSON.stringify({ digestAt: "20:30" }) }).setupComplete).toBe(true);
+  it("setup requires a Handoff time", () => {
+    expect(() => validateProfileInput({ setupComplete: true })).toThrow(/Handoff time/);
+    expect(validateProfileInput({ setupComplete: true, alertPrefs: JSON.stringify({ handoffAt: "20:30" }) }).setupComplete).toBe(true);
   });
-  it("rejects malformed digest time", () => {
-    expect(() => validateProfileInput({ alertPrefs: { digestAt: "8pm" } })).toThrow();
+  it("rejects malformed Handoff time", () => {
+    expect(() => validateProfileInput({ alertPrefs: { handoffAt: "8pm" } })).toThrow();
   });
 });

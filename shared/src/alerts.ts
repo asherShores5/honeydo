@@ -6,9 +6,26 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   slots: { low: ["09:00"], medium: ["09:00", "17:00"], high: ["09:00", "13:00", "19:00"] },
   quietStart: "21:00",
   quietEnd: "07:00",
-  digestAt: "20:00",
+  handoffAt: "20:00",
   overdueAlerts: true,
 };
+
+/**
+ * A Member's alert prefs as stored on their Profile, with defaults filled in. Profiles saved
+ * before M4 carry the Handoff time as `digestAt`; that is read as `handoffAt`.
+ */
+export function readAlertPrefs(stored: unknown): AlertPrefs {
+  const raw = stored && typeof stored === "object" ? (stored as Record<string, unknown>) : {};
+  const p = raw as Partial<AlertPrefs> & { digestAt?: unknown };
+  const d = DEFAULT_ALERT_PREFS;
+  return {
+    slots: { low: p.slots?.low ?? d.slots.low, medium: p.slots?.medium ?? d.slots.medium, high: p.slots?.high ?? d.slots.high },
+    quietStart: p.quietStart ?? d.quietStart,
+    quietEnd: p.quietEnd ?? d.quietEnd,
+    handoffAt: p.handoffAt ?? (typeof p.digestAt === "string" ? p.digestAt : d.handoffAt),
+    overdueAlerts: p.overdueAlerts ?? d.overdueAlerts,
+  };
+}
 
 function minutes(hhmm: string): number {
   const { hour, minute } = parseHHMM(hhmm);
