@@ -75,6 +75,10 @@ The home tab holding green and yellow Items.
 The home tab holding red Items; also describes an Item that is red.
 _Avoid_: Late, past due
 
+**Finished**:
+The home tab listing Archived Tasks that were Done.
+_Avoid_: Completed
+
 ### People and privacy
 
 **Household**:

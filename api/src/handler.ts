@@ -55,10 +55,10 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
   return out;
 }
 
-const FEED_SIZE = 100;
+const ACTIVITY_SIZE = 100;
 
-/** The newest FEED_SIZE feed events `ctx` may see, newest first. Pages past events hidden from them. */
-async function visibleFeed(ctx: Ctx) {
+/** The newest ACTIVITY_SIZE Activity events `ctx` may see, newest first. Pages past events hidden from them. */
+async function visibleActivity(ctx: Ctx) {
   const out: Record<string, unknown>[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
@@ -68,14 +68,14 @@ async function visibleFeed(ctx: Ctx) {
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
         ExpressionAttributeValues: { ":pk": PK, ":p": "FEED#" },
         ScanIndexForward: false,
-        Limit: FEED_SIZE,
+        Limit: ACTIVITY_SIZE,
         ExclusiveStartKey,
       }),
     );
     out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId)));
     ExclusiveStartKey = r.LastEvaluatedKey;
-  } while (ExclusiveStartKey && out.length < FEED_SIZE);
-  return out.slice(0, FEED_SIZE);
+  } while (ExclusiveStartKey && out.length < ACTIVITY_SIZE);
+  return out.slice(0, ACTIVITY_SIZE);
 }
 
 function strip<T>(rec: Record<string, unknown>): T {
@@ -145,7 +145,7 @@ async function userIds(): Promise<string[]> {
 }
 
 function touch(rec: Record<string, unknown>) {
-  // GSI1 (PK, updatedAt) powers delta sync.
+  // GSI1 (PK, updatedAt) is written for a future delta sync; nothing reads it yet.
   return { ...rec, GSI1PK: PK };
 }
 
@@ -208,7 +208,7 @@ async function snapshot(ctx: Ctx) {
     queryPrefix("ITEM#"),
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
-    visibleFeed(ctx),
+    visibleActivity(ctx),
   ]);
   return {
     items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
@@ -249,17 +249,17 @@ async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: num
     updatedAt: now,
     version: ((existing?.version as number) ?? 0) + 1,
   });
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: rec,
-      ConditionExpression: existing ? "version = :v" : "attribute_not_exists(SK)",
-      ExpressionAttributeValues: existing ? { ":v": existing.version } : undefined,
-    }),
-  ).catch((e) => {
-    if (e.name === "ConditionalCheckFailedException") throw new UserError("ConflictError", "item changed, retry");
-    throw e;
-  });
+  const written = await ddb
+    .send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: rec,
+        ConditionExpression: existing ? "version = :v" : "attribute_not_exists(SK)",
+        ExpressionAttributeValues: existing ? { ":v": existing.version } : undefined,
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!written) throw new UserError("ConflictError", "item changed, retry");
   await feed(ctx, existing ? (fields.archived && !existing.archived ? "archived" : "edited") : "created", rec);
   const lostSight = existing
     ? users.filter((u) => canSee(existing.visibility as string, u) && !canSee(fields.visibility, u))
@@ -356,18 +356,18 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
   }
   const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
   // A Tag belongs to exactly one Tag group: an ID collision must not move it to another group.
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE,
-      Item: rec,
-      ConditionExpression: "attribute_not_exists(SK) OR #g = :g",
-      ExpressionAttributeNames: { "#g": "group" },
-      ExpressionAttributeValues: { ":g": group.trim() },
-    }),
-  ).catch((e) => {
-    if (e.name === "ConditionalCheckFailedException") throw new UserError("ValidationError", "tag ID belongs to another group");
-    throw e;
-  });
+  const written = await ddb
+    .send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: rec,
+        ConditionExpression: "attribute_not_exists(SK) OR #g = :g",
+        ExpressionAttributeNames: { "#g": "group" },
+        ExpressionAttributeValues: { ":g": group.trim() },
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (!written) throw new UserError("ValidationError", "tag ID belongs to another group");
   return strip(rec);
 }
 
