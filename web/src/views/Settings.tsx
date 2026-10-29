@@ -3,6 +3,7 @@ import { readAlertPrefs, type AlertPrefs, type Severity } from "@aubi/shared";
 import { listPasskeys, registerPasskey, signOut } from "../auth";
 import { removeTag, saveProfile, saveTag, toast, useStore } from "../store";
 import { groupTags, tagId } from "../tags";
+import { releaseThisDevice } from "../notifications";
 import { NotificationsStep } from "./Notifications";
 import { COLORS } from "./Setup";
 
@@ -70,7 +71,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
         <label>Handoff time
           <input type="time" value={prefs.handoffAt} onChange={(e) => setPrefs({ ...prefs, handoffAt: e.target.value })}
             onBlur={() => savePref("handoffAt", prefs.handoffAt)} />
-          <small>Your daily summary. It keeps coming even with overdue alerts off.</small>
+          <small>Your once-a-day Handoff: what got done, what's overdue and what's due before the next one. It keeps coming even with overdue alerts off.</small>
         </label>
         <label>Overdue alerts
           <div className="seg">
@@ -88,7 +89,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
             <input type="time" aria-label="Quiet hours end" value={prefs.quietEnd}
               onChange={(e) => setPrefs({ ...prefs, quietEnd: e.target.value })} onBlur={() => savePref("quietEnd", prefs.quietEnd)} />
           </div>
-          <small>No dings in this span; any that land in it come at the end.</small>
+          <small>No Dings in this span; any that land in it come at the end.</small>
         </label>
         {SEVERITIES.map(([sev, label]) => (
           <label key={sev}>{label} ding times
@@ -127,7 +128,8 @@ export function Settings({ onClose }: { onClose: () => void }) {
         <button onClick={() => registerPasskey().then(() => (toast("Passkey added"), setPasskeys((passkeys ?? 0) + 1)), (e) => toast(e.message))}>
           Add a passkey for this device
         </button>
-        <button className="danger" onClick={() => void signOut()}>Sign out</button>
+        {/* Push cleanup first, while the tokens still work (story 25). */}
+        <button className="danger" onClick={() => void releaseThisDevice().finally(signOut)}>Sign out</button>
       </div>
     </div>
   );

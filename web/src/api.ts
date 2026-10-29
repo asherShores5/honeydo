@@ -1,5 +1,6 @@
 import { freshTokens } from "./auth";
 import { getConfig } from "./config";
+import { withTimeout } from "./timeout";
 
 export class ApiError extends Error {
   constructor(message: string, public kind: "network" | "conflict" | "rejected") {
@@ -33,20 +34,28 @@ export const Q = {
   onProfileChange: `subscription { onProfileChange { ${PROFILE} } }`,
 };
 
-export async function gql<T = any>(query: string, variables: object = {}): Promise<T> {
-  let r: Response;
+/** One call may take this long before it counts as offline, so a weak bar can't hang the app. */
+const GQL_TIMEOUT_MS = 8000;
+
+export function gql<T = any>(query: string, variables: object = {}): Promise<T> {
+  return withTimeout((signal) => gqlOnce<T>(query, variables, signal), GQL_TIMEOUT_MS, () => new ApiError("timed out", "network"));
+}
+
+async function gqlOnce<T>(query: string, variables: object, signal: AbortSignal): Promise<T> {
+  let json: any;
   try {
     const { idToken } = await freshTokens();
-    r = await fetch(getConfig().graphqlUrl, {
+    const r = await fetch(getConfig().graphqlUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: idToken },
       body: JSON.stringify({ query, variables }),
+      signal,
     });
+    if (r.status >= 500) throw new ApiError(`server ${r.status}`, "network");
+    json = await r.json(); // inside the try: a timeout can abort the body read too
   } catch (e) {
-    throw new ApiError(String((e as Error).message), "network");
+    throw e instanceof ApiError ? e : new ApiError(String((e as Error).message), "network");
   }
-  if (r.status >= 500) throw new ApiError(`server ${r.status}`, "network");
-  const json = await r.json();
   if (json.errors?.length) {
     const msg = json.errors.map((e: { message: string }) => e.message).join("; ");
     throw new ApiError(msg, msg.includes("ConflictError") ? "conflict" : "rejected");

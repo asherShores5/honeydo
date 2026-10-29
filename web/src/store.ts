@@ -2,7 +2,9 @@
 import { useSyncExternalStore } from "react";
 import type { AlertPrefs, Item } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
+import { currentUsername } from "./auth";
 import { applyItemChange, type ItemChange } from "./itemChange";
+import { showCachedFirst } from "./launch";
 import { keepPending, type ItemInput, type Op } from "./outbox";
 import { liveTags } from "./tags";
 
@@ -159,14 +161,25 @@ export async function refresh(serverCopyOf?: string) {
 let rt: Realtime | undefined;
 
 export async function start() {
-  const { me } = await gql(Q.me).catch((e) => {
-    if (state.me) return { me: null }; // offline launch with cache
-    throw e;
-  });
-  if (me) set({ me: profileIn(me) });
-  await refresh();
-  set({ ready: true });
-  void flush();
+  // Weak signal (story 34): with this Member's own cache, show it now and sync behind it.
+  const cached = showCachedFirst(state.me, currentUsername());
+  if (!cached && state.me) reset(); // someone else's cache: never show it
+  if (cached) set({ ready: true });
+  const sync = (async () => {
+    const { me } = await gql(Q.me).catch((e) => {
+      if (state.me) return { me: null }; // offline launch with cache
+      throw e;
+    });
+    if (me) set({ me: profileIn(me) });
+    await refresh();
+  })();
+  if (cached) {
+    void sync.then(flush).catch((e) => toast(`Couldn't sync: ${(e as Error).message}`));
+  } else {
+    await sync;
+    set({ ready: true });
+    void flush();
+  }
 
   rt = new Realtime(() => void refresh(), (live) => set({ live }));
   rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
@@ -184,10 +197,17 @@ export async function start() {
   window.addEventListener("offline", () => set({ online: false }));
 }
 
+/** Drop everything held for the last Member, in memory too, so the next sign-in starts clean. */
+function reset() {
+  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], online: navigator.onLine, live: false, outbox: [] };
+  listeners.forEach((l) => l());
+}
+
 export function stop() {
   rt?.close();
   localStorage.removeItem(CACHE);
   localStorage.removeItem(OUTBOX);
+  reset();
 }
 
 // ---- outbox ----------------------------------------------------------------
