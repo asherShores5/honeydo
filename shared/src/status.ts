@@ -3,6 +3,13 @@ import { DAY, HOUR, fromWall, parseHHMM, toWall } from "./time";
 
 const UNIT_MS = { hours: HOUR, days: DAY, weeks: 7 * DAY } as const;
 
+type IntervalRec = Extract<Recurrence, { type: "interval" }>;
+
+/** An Interval's length in ms. */
+export function intervalMs(rec: IntervalRec): number {
+  return rec.every * UNIT_MS[rec.unit];
+}
+
 /** SPEC §4.2: max(1 day, 10% of interval), capped at 50% of interval for short chores. */
 export function defaultWarnWindow(intervalMs: number): number {
   return Math.min(Math.max(DAY, intervalMs * 0.1), intervalMs * 0.5);
@@ -59,7 +66,7 @@ export function schedule(item: Item): Schedule {
   const rec = item.recurrence;
 
   if (rec.type === "interval") {
-    const interval = rec.every * UNIT_MS[rec.unit];
+    const interval = intervalMs(rec);
     const warnWindow = item.warnWindow ?? defaultWarnWindow(interval);
     // Never done: due now, so it shows up as something to do.
     const nextDue = item.lastDoneAt === undefined ? item.createdAt : item.lastDoneAt + interval;

@@ -1,6 +1,6 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { AlertPrefs, Completion, Item, Note } from "@aubi/shared";
+import type { AlertPrefs, Completion, Item, Note, SavedView, Who } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { currentUsername } from "./auth";
 import { applyCommentChange, dropItemActivity, type Comment, type CommentChange } from "./comments";
@@ -16,8 +16,7 @@ export interface Tag { id: string; name: string; group: string; color?: string; 
  * maps a cached pre-M4 `digestAt` to `handoffAt`.
  */
 export type AlertPrefsPatch = Partial<AlertPrefs>;
-export interface SavedView { id: string; name: string; tags: string[]; who: Who }
-export type Who = "anyone" | "mine" | "partner" | "unassigned";
+export type { SavedView, Who };
 export interface Profile {
   userId: string; username: string; displayName?: string; color?: string; theme?: string; density?: string;
   defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsPatch | null;

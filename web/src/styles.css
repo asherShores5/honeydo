@@ -53,8 +53,8 @@ header h1 { font-size: 22px; margin: 0; flex: 1; }
 .sync.off { color: var(--red); }
 .sync.live::before { content: "● "; color: var(--green); }
 .avatar { width: 36px; height: 36px; border-radius: 50%; padding: 0; color: #fff; font-weight: 700; border: none; }
-.tabs { display: flex; gap: 6px; padding: 0 16px; position: sticky; top: calc(env(safe-area-inset-top) + 54px); z-index: 2; background: var(--bg); padding-bottom: 8px; }
-.tabs button { flex: 1; border-radius: 999px; font-size: 14px; }
+.tabs { display: flex; gap: 6px; padding: 0 16px; overflow-x: auto; scrollbar-width: none; position: sticky; top: calc(env(safe-area-inset-top) + 54px); z-index: 2; background: var(--bg); padding-bottom: 8px; }
+.tabs button { flex: 1 0 auto; white-space: nowrap; border-radius: 999px; font-size: 14px; }
 .tabs button b { font-weight: 700; margin-left: 4px; }
 .tabs .on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .tabs .on.red { background: var(--red); border-color: var(--red); color: #fff; }
@@ -124,3 +124,18 @@ ul { list-style: none; margin: 0; padding: 0; }
 .note .meta { margin: 0; font-size: 13px; color: var(--muted); }
 .note-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .note-actions select { width: auto; padding: 4px 8px; font-size: 13px; }
+
+/* M5 Views */
+.views, .board, .calendar, .stats { padding: 0 16px; }
+.views > .items, .views > .board, .views > .calendar, .views > .stats { padding: 0; }
+.column h3, .day h3, .views h3, .stats h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 6px; }
+.column h3 b { margin-left: 4px; }
+.board .columns { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; }
+.board .column { flex: 0 0 85%; scroll-snap-align: start; }
+.day.today h3 { color: var(--fg); }
+.calendar .feed li.done i { opacity: .7; }
+.item .snooze { width: 48px; border: none; border-left: 1px solid var(--line); border-radius: 0; font-size: 18px; background: none; }
+.saved-views { list-style: none; padding: 0; margin: 0; }
+.saved-views li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.saved-views li b { flex: 1 0 100%; }
+.hint { color: var(--muted); font-size: 13px; }
