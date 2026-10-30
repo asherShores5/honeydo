@@ -142,6 +142,15 @@ _Avoid_: Preset, filter
 A screen with one column per Tag in a chosen Tag group.
 _Avoid_: Board, kanban
 
+**Today**:
+A view of the Items due before tonight's midnight, or red or yellow now, grouped by Time-of-day Tag.
+
+**Calendar**:
+A view of upcoming due dates (Chores projected forward) and past Completions, day by day.
+
+**History & stats**:
+The Household-wide view of who did how many Completions in a period, and each Interval Chore's target vs actual interval. Not the same as an Item's History (its own Completion list).
+
 ### Talking
 
 **Activity**:

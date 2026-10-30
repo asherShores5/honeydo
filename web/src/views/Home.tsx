@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { schedule, status, unreadActivity, urgency, type Item, type Status } from "@aubi/shared";
-import { completeItem, markActivitySeen, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
-import { ago, span } from "../format";
+import { VIEW_NAME_MAX, status, unreadActivity, urgency, type Item, type SavedView } from "@aubi/shared";
+import { completeItem, markActivitySeen, nameOf, saveViews as saveMyViews, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
+import { ago, newId } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
 import { Settings } from "./Settings";
@@ -14,8 +14,11 @@ import { Fridge } from "./Fridge";
 import type { Note } from "@aubi/shared";
 import { markNoteTasked } from "../store";
 import { linksNote, taskDraft } from "../noteToTask";
+import { ItemRow, LABEL } from "./ItemRow";
+import { BUILTIN_VIEWS, BoardView, CalendarView, SavedViewBody, SavedViewsManager, StatsView, TodayView, type BuiltinView } from "./Views";
 
-type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge";
+/** `view:<id>` is a pinned Saved view (m5/05). */
+type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge" | "views" | `view:${string}`;
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -56,6 +59,26 @@ export function Home() {
   const [settings, setSettings] = useState(false);
   const [undo, setUndo] = useState<{ itemId: string; at: number; title: string } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
+  const [builtin, setBuiltin] = useState<BuiltinView>("today");
+  const savedViews = me.savedViews ?? [];
+  const pinned = savedViews.filter((v) => v.pinned);
+  const activeView = tab.startsWith("view:") ? savedViews.find((v) => `view:${v.id}` === tab) : undefined;
+  // A pinned view deleted or unpinned on another device: fall back to On track.
+  useEffect(() => {
+    if (tab.startsWith("view:") && !activeView?.pinned) setTab("ontrack");
+  }, [tab, activeView]);
+
+  function saveViews(next: SavedView[]) {
+    saveMyViews({ savedViews: next }).catch(() => toast("Couldn't save your views. Check your connection."));
+  }
+  function saveCurrentAsView() {
+    const name = window.prompt("Name this view")?.trim();
+    if (!name) return;
+    const view: SavedView = { id: newId(), name: name.slice(0, VIEW_NAME_MAX), tags: [...selected], who, sort: "urgency", layout: "list", pinned: true };
+    saveViews([...savedViews, view]);
+    setTab(`view:${view.id}`);
+  }
+  const viewFilter = (i: Item, v: SavedView) => matches(i, new Set(v.tags), tags, v.who, me.userId);
   // m2/03: "Make Task" on a Note opens the Editor pre-filled; a Note's Task opens like a Ding's item.
   const [fromNote, setFromNote] = useState<Note | null>(null);
   function openTask(taskId: string) {
@@ -81,7 +104,7 @@ export function Home() {
   const first = useRef(true);
   useEffect(() => {
     if (first.current) return void (first.current = false);
-    const t = setTimeout(() => void saveProfile({ defaultView: { id: "default", name: "Default", tags: [...selected], who } }).catch(() => {}), 1200);
+    const t = setTimeout(() => void saveMyViews({ defaultView: { id: "default", name: "Default", tags: [...selected], who } }).catch(() => {}), 1200);
     return () => clearTimeout(t);
   }, [selected, who]);
 
@@ -124,6 +147,7 @@ export function Home() {
   }
 
   const filterCount = selected.size + (who === "anyone" ? 0 : 1);
+  const actions = { onOpen: (i: Item) => setEditing(i), onDone: done };
 
   return (
     <div className="app" data-density={me.density ?? "cards"}>
@@ -147,6 +171,10 @@ export function Home() {
           Activity{unread > 0 && <b className="unread" aria-label={`${unread} unread`}>{unread > 99 ? "99+" : unread}</b>}
         </button>
         <button className={tab === "fridge" ? "on" : ""} onClick={() => setTab("fridge")}>Fridge</button>
+        <button className={tab === "views" ? "on" : ""} onClick={() => setTab("views")}>Views</button>
+        {pinned.map((v) => (
+          <button key={v.id} className={tab === `view:${v.id}` ? "on" : ""} onClick={() => setTab(`view:${v.id}`)}>{v.name}</button>
+        ))}
       </nav>
 
       {(tab === "ontrack" || tab === "overdue") && (
@@ -174,13 +202,30 @@ export function Home() {
                 </div>
               ))}
               {filterCount > 0 && <button className="link" onClick={() => (setSelected(new Set()), setWho("anyone"))}>Clear filters</button>}
+              <button className="link" onClick={saveCurrentAsView}>Save view</button>
             </div>
           )}
         </div>
       )}
 
       <main>
-        {tab === "fridge" ? (
+        {activeView ? (
+          <SavedViewBody view={activeView} items={Object.values(items)} now={now} actions={actions} filter={viewFilter} />
+        ) : tab === "views" ? (
+          <div className="views">
+            <div className="group">
+              {BUILTIN_VIEWS.map(([v, label]) => (
+                <button key={v} className={`chip ${builtin === v ? "on" : ""}`} onClick={() => setBuiltin(v)}>{label}</button>
+              ))}
+            </div>
+            {builtin === "today" && <TodayView items={Object.values(items)} now={now} actions={actions} />}
+            {builtin === "calendar" && <CalendarView items={Object.values(items)} now={now} actions={actions} />}
+            {builtin === "board" && <BoardView items={Object.values(items)} now={now} actions={actions} />}
+            {builtin === "stats" && <StatsView items={Object.values(items)} now={now} />}
+            <h3>Your Saved views</h3>
+            <SavedViewsManager views={savedViews} onChange={saveViews} />
+          </div>
+        ) : tab === "fridge" ? (
           <Fridge now={now} onMakeTask={setFromNote} onOpenTask={openTask} />
         ) : tab === "activity" ? (
           <ul className="feed">
@@ -208,10 +253,10 @@ export function Home() {
           </ul>
         ) : (
           <ul className="items">
-            {visible[tab].length === 0 && (
+            {visible[tab === "overdue" ? "overdue" : "ontrack"].length === 0 && (
               <li className="empty">{tab === "overdue" ? "Nothing overdue 🎉" : filterCount ? "No matches for this filter." : "No chores yet. Tap + to add one."}</li>
             )}
-            {visible[tab].map((i) => (
+            {visible[tab === "overdue" ? "overdue" : "ontrack"].map((i) => (
               <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => setEditing(i)} onDone={() => done(i)} />
             ))}
           </ul>
@@ -246,34 +291,5 @@ export function Home() {
       )}
       {settings && <Settings onClose={() => setSettings(false)} />}
     </div>
-  );
-}
-
-const LABEL: Record<Status, string> = { green: "On track", yellow: "Due soon", red: "Overdue", snoozed: "Snoozed", done: "Done" };
-
-function ItemRow({ item, now, tags, onOpen, onDone }: { item: Item; now: number; tags: Record<string, Tag>; onOpen: () => void; onDone: () => void }) {
-  const st = status(item, now);
-  const { nextDue } = schedule(item);
-  const due = nextDue === null ? "no due date" : nextDue > now ? `due in ${span(nextDue - now)}` : `overdue ${span(now - nextDue)}`;
-  return (
-    <li className={`item ${st}`}>
-      <button className="body" onClick={onOpen}>
-        <span className="dot" aria-label={LABEL[st]} />
-        <span className="title">
-          {item.title}
-          {item.visibility !== "shared" && <span title="Private"> 🔒</span>}
-          {item.severity && <span className={`sev ${item.severity}`}>{item.severity}</span>}
-        </span>
-        <span className="meta">
-          {st === "snoozed" ? `snoozed ${span(item.snoozedUntil! - now)}` : due}
-          {item.lastDoneAt !== undefined && ` · last ${ago(item.lastDoneAt, now)}${item.lastDoneBy ? ` by ${nameOf(item.lastDoneBy)}` : ""}`}
-          {item.assigneeId && ` · for ${nameOf(item.assigneeId)}`}
-        </span>
-        {item.tags.length > 0 && (
-          <span className="tags">{item.tags.map((t) => tags[t] && <span key={t}>{chipLabel(tags[t], tags)}</span>)}</span>
-        )}
-      </button>
-      <button className="done" onClick={onDone} aria-label={`Mark ${item.title} done`}>✓</button>
-    </li>
   );
 }

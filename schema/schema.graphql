@@ -74,7 +74,9 @@ type Profile {
   color: String
   theme: String
   density: String
+  "Own only, on `me`: my default view (filter remembered on Home). Null elsewhere."
   defaultView: AWSJSON
+  "Own only, on `me`: my Saved views, set by saveViews. Null on any Profile the partner can read."
   savedViews: AWSJSON
   alertPrefs: AWSJSON
   "Own only: when the Member last opened Activity (ms), set by markActivitySeen. Filled on `me`; null on any Profile the partner can read."
@@ -92,8 +94,6 @@ input ProfileInput {
   color: String
   theme: String
   density: String
-  defaultView: AWSJSON
-  savedViews: AWSJSON
   alertPrefs: AWSJSON
   setupComplete: Boolean
 }
@@ -170,7 +170,8 @@ type Note {
 type Query {
   me: Profile!
   snapshot: Snapshot!
-  completions(itemId: ID!, limit: Int): [Completion!]!
+  "Newest `limit` (default 50), or with `since` every Completion at or after it (up to 5000)."
+  completions(itemId: ID!, limit: Int, since: Float): [Completion!]!
   "The Item's Comments, oldest first. NotFound if the caller can't see the Item."
   comments(itemId: ID!): [Comment!]!
 }
@@ -189,6 +190,8 @@ type Mutation {
   deletePushSubscription(deviceId: ID!): PushDevice!
   "Save when I last opened Activity (ms); returns the stored time. Only moves forward, capped at the server's now. No subscription listens to it, so the partner never sees it."
   markActivitySeen(at: Float!): Float!
+  "Save my Saved views and/or default view; returns my own Profile. No subscription listens to it, so the partner never receives them."
+  saveViews(savedViews: AWSJSON, defaultView: AWSJSON): Profile!
   "Add a Comment. The client picks id, so a retry with the same id writes nothing twice."
   addComment(itemId: ID!, id: ID!, text: String!): CommentChange!
   "Post a Note on the Fridge. The id comes from the client, so a replay returns the stored Note."
