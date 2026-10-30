@@ -1,4 +1,4 @@
-import { PutCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { describe, expect, it } from "vitest";
 import { FakeDocClient } from "./fakeDynamo";
 
@@ -26,5 +26,17 @@ describe("fakeDynamo matches DynamoDB", () => {
       CancellationReasons: [{ Code: "ConditionalCheckFailed" }, { Code: "None" }],
     });
     expect(db.dump().map((r) => r.SK)).toEqual(["a"]);
+  });
+
+  it("Select COUNT returns a Count and no Items", async () => {
+    const db = new FakeDocClient();
+    db.seed({ PK: "p", SK: "X#1" }, { PK: "p", SK: "X#2" }, { PK: "p", SK: "Y#1" });
+    const r = await db.send(
+      new QueryCommand({
+        TableName: "t", KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
+        ExpressionAttributeValues: { ":pk": "p", ":p": "X#" }, Select: "COUNT",
+      }),
+    );
+    expect(r).toEqual({ Count: 2, LastEvaluatedKey: undefined });
   });
 });

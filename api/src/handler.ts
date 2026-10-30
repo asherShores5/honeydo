@@ -59,6 +59,29 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
   return out;
 }
 
+/** How many records start with `prefix`. Select COUNT returns no items, so this reads keys only. */
+async function countPrefix(prefix: string) {
+  let n = 0;
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
+        ExpressionAttributeValues: { ":pk": PK, ":p": prefix },
+        Select: "COUNT",
+        ExclusiveStartKey,
+      }),
+    );
+    n += r.Count ?? 0;
+    ExclusiveStartKey = r.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+  return n;
+}
+
+/** Record caps against a scripted flood, generous enough that normal use never meets them. */
+const LIMITS = { pushDevices: 10, items: 2000, notes: 300, commentsPerItem: 500 } as const;
+
 const ACTIVITY_SIZE = 100;
 
 /**
@@ -519,6 +542,12 @@ async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
  */
 async function putPushSubscription(ctx: Ctx, args: PushSubscriptionInput) {
   const sub = validatePushSubscription(args);
+  const key = { PK, SK: pushKey(ctx.userId, sub.deviceId) };
+  // Re-registering a device always works; a new one only under the cap.
+  const known = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  if (!known && (await countPrefix(pushKey(ctx.userId, ""))) >= LIMITS.pushDevices) {
+    throw new UserError("ValidationError", `at most ${LIMITS.pushDevices} devices can get notifications`);
+  }
   const now = Date.now();
   await ddb.send(
     new PutCommand({

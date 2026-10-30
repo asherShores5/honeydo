@@ -185,9 +185,10 @@ export class FakeDocClient {
   }
 
   private query(input: QueryCommand["input"]) {
-    const { IndexName, FilterExpression, KeyConditionExpression: kce, ExpressionAttributeNames: n, ExpressionAttributeValues: v } = input;
+    const { IndexName, FilterExpression, Select, KeyConditionExpression: kce, ExpressionAttributeNames: n, ExpressionAttributeValues: v } = input;
     if (IndexName) unsupported("IndexName", IndexName);
     if (FilterExpression) unsupported("FilterExpression", FilterExpression);
+    if (Select && Select !== "COUNT") unsupported("Select", Select);
     const terms = kce!.split(/\s+AND\s+/);
     const pk = /^(\S+)\s*=\s*(\S+)$/.exec(terms[0].trim());
     if (!pk || attr(pk[1], n) !== "PK") unsupported("key condition", kce!);
@@ -204,9 +205,9 @@ export class FakeDocClient {
     }
     const page = input.Limit ? rows.slice(0, input.Limit) : rows;
     const last = page.at(-1);
-    return {
-      Items: page.map((r) => structuredClone(r)),
-      LastEvaluatedKey: input.Limit && page.length === input.Limit && last ? { PK: last.PK, SK: last.SK } : undefined,
-    };
+    const LastEvaluatedKey = input.Limit && page.length === input.Limit && last ? { PK: last.PK, SK: last.SK } : undefined;
+    // Select COUNT: like DynamoDB, a Count and no Items.
+    if (Select === "COUNT") return { Count: page.length, LastEvaluatedKey };
+    return { Items: page.map((r) => structuredClone(r)), Count: page.length, LastEvaluatedKey };
   }
 }

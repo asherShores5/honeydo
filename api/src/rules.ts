@@ -235,17 +235,32 @@ export function validateDeviceId(deviceId: unknown): string {
   return deviceId;
 }
 
-/** A browser PushSubscription as sent by the Enable step. The Notifier POSTs to `endpoint`, so it must be https. */
+/** The browsers' push services: Chrome/Android, Firefox, Safari/iOS, Edge on Windows. */
+const PUSH_HOSTS = ["fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com"];
+const PUSH_HOST_SUFFIXES = [".push.apple.com", ".notify.windows.com"];
+
+/**
+ * The Notifier POSTs to the endpoint, so it must be a known push service over https on 443, or
+ * anyone signed in could aim the Lambda at any host (SSRF). URL lowercases the host and drops
+ * ":443"; IP literals and trailing-dot hosts never match the list.
+ */
+function isPushServiceUrl(url: URL | undefined): boolean {
+  if (!url || url.protocol !== "https:" || url.port !== "" || url.username || url.password) return false;
+  const host = url.hostname;
+  return PUSH_HOSTS.includes(host) || PUSH_HOST_SUFFIXES.some((s) => host.endsWith(s) && host.length > s.length);
+}
+
+/** A browser PushSubscription as sent by the Enable step. */
 export function validatePushSubscription(input: PushSubscriptionInput): PushSubscriptionInput {
   const deviceId = validateDeviceId(input.deviceId);
   const { endpoint, p256dh, auth } = input;
   let url: URL | undefined;
   try {
-    url = new URL(endpoint);
+    url = typeof endpoint === "string" ? new URL(endpoint) : undefined;
   } catch {
     // falls through to the check below
   }
-  if (url?.protocol !== "https:" || endpoint.length > 2048) throw new UserError("ValidationError", "bad push endpoint");
+  if (!isPushServiceUrl(url) || endpoint.length > 2048) throw new UserError("ValidationError", "bad push endpoint");
   for (const [k, max] of [[p256dh, 200], [auth, 100]] as const) {
     if (typeof k !== "string" || !B64URL_RE.test(k) || k.length > max) throw new UserError("ValidationError", "bad push key");
   }
