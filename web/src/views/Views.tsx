@@ -2,7 +2,7 @@
 // pure derivation from @aubi/shared over the snapshot (plus Completions where it needs them).
 import { useEffect, useMemo, useState } from "react";
 import {
-  DAY, TIME_OF_DAY, calendarDays, endOfDay, fromWall, historyStats, sortItems, status, tagBoard, toWall, todayGroups,
+  DAY, TIME_OF_DAY, calendarDays, endOfDay, fromWall, historyStats, isActive, sortItems, tagBoard, toWall, todayGroups,
   type Completion, type Item, type SavedView, type TagColumn, type ViewLayout,
 } from "@aubi/shared";
 import { loadCompletionsOf, nameOf, snooze, useStore, type Tag } from "../store";
@@ -18,27 +18,29 @@ interface Actions {
   onDone: (item: Item) => void;
 }
 
-/** Completions of these items, newest 50 each, reloaded when the set changes. */
-function useCompletions(itemIds: string[]): Completion[] | null {
+/** Every Completion of these items since `since`, reloaded when the set or `since` changes. */
+function useCompletions(itemIds: string[], since: number): Completion[] | null {
   const key = [...itemIds].sort().join(",");
   const [list, setList] = useState<Completion[] | null>(null);
   useEffect(() => {
     let live = true;
     setList(null);
-    loadCompletionsOf(key ? key.split(",") : [], 50).then((c) => live && setList(c), () => live && setList([]));
+    loadCompletionsOf(key ? key.split(",") : [], 50, since).then((c) => live && setList(c), () => live && setList([]));
     return () => void (live = false);
-  }, [key]);
+  }, [key, since]);
   return list;
 }
 
-function Columns({ columns, now, tags, actions, snoozable, emptyLabel }: {
-  columns: TagColumn[]; now: number; tags: Record<string, Tag>; actions: Actions; snoozable?: boolean; emptyLabel: string;
+function Columns({ columns, now, tags, actions, snoozable, untaggedLabel }: {
+  columns: TagColumn[]; now: number; tags: Record<string, Tag>; actions: Actions; snoozable?: boolean;
+  /** Heading of the column for items with no Tag in the group. */
+  untaggedLabel: string;
 }) {
   return (
     <>
       {columns.map((c) => (
         <section key={c.tag?.id ?? "none"} className="column">
-          <h3>{c.tag?.name ?? emptyLabel} <b>{c.items.length}</b></h3>
+          <h3>{c.tag?.name ?? untaggedLabel} <b>{c.items.length}</b></h3>
           <ul className="items">
             {c.items.length === 0 && <li className="empty">Nothing here.</li>}
             {c.items.map((i) => (
@@ -56,12 +58,10 @@ export function TodayView({ items, now, actions }: { items: Item[]; now: number;
   const tags = useStore((s) => s.tags);
   const groups = useMemo(() => todayGroups(items, Object.values(tags), now), [items, tags, now]);
   if (!groups.length) return <p className="empty">Nothing due today 🎉</p>;
-  return <Columns columns={groups} now={now} tags={tags} actions={actions} emptyLabel={`No ${TIME_OF_DAY.toLowerCase()}`} />;
+  return <Columns columns={groups} now={now} tags={tags} actions={actions} untaggedLabel={`No ${TIME_OF_DAY.toLowerCase()}`} />;
 }
 
-export function BoardView({ items, now, actions, group, onGroup }: {
-  items: Item[]; now: number; actions: Actions; group?: string; onGroup?: (g: string) => void;
-}) {
+export function BoardView({ items, now, actions, group }: { items: Item[]; now: number; actions: Actions; group?: string }) {
   const tags = useStore((s) => s.tags);
   const groups = [...groupTags(tags).keys()];
   const [picked, setPicked] = useState(group ?? groups.find((g) => g === "Locale") ?? groups[0]);
@@ -71,12 +71,12 @@ export function BoardView({ items, now, actions, group, onGroup }: {
     <div className="board">
       <div className="group">
         {groups.map((g) => (
-          <button key={g} className={`chip ${g === current ? "on" : ""}`} onClick={() => (setPicked(g), onGroup?.(g))}>{g}</button>
+          <button key={g} className={`chip ${g === current ? "on" : ""}`} onClick={() => setPicked(g)}>{g}</button>
         ))}
       </div>
       {!current ? <p className="empty">Add some Tags first.</p> : (
         <div className="columns">
-          <Columns columns={columns} now={now} tags={tags} actions={actions} snoozable emptyLabel={`No ${current.toLowerCase()}`} />
+          <Columns columns={columns} now={now} tags={tags} actions={actions} snoozable untaggedLabel={`No ${current.toLowerCase()}`} />
         </div>
       )}
     </div>
@@ -89,8 +89,8 @@ export function CalendarView({ items, now, actions }: { items: Item[]; now: numb
   const [offset, setOffset] = useState(0); // weeks from this one
   const w = toWall(now);
   const start = fromWall(w.year, w.month, w.day - 1 + offset * 7); // yesterday, so recent Completions show
-  const completions = useCompletions(items.map((i) => i.id));
-  const days = useMemo(() => calendarDays(items, completions ?? [], start, 8), [items, completions, start]);
+  const completions = useCompletions(items.map((i) => i.id), start);
+  const days = useMemo(() => calendarDays(items, completions ?? [], start, 8, now), [items, completions, start]);
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   return (
     <div className="calendar">
@@ -126,9 +126,12 @@ export function StatsView({ items, now }: { items: Item[]; now: number }) {
   const me = useStore((s) => s.me!);
   const profiles = useStore((s) => s.profiles);
   const [days, setDays] = useState(30);
-  const completions = useCompletions(items.map((i) => i.id));
+  // Whole Pacific days: the period starts at midnight `days - 1` days before today.
+  const w = toWall(now);
+  const from = fromWall(w.year, w.month, w.day - days + 1);
+  const completions = useCompletions(items.map((i) => i.id), from);
   const members = useMemo(() => [...new Set([me.userId, ...Object.keys(profiles)])], [me.userId, profiles]);
-  const stats = useMemo(() => historyStats(items, completions ?? [], members, now - days * DAY, now + 1), [items, completions, members, now, days]);
+  const stats = useMemo(() => historyStats(items, completions ?? [], members, from, now + 1), [items, completions, members, now, from]);
   if (completions === null) return <p className="empty">Loading History…</p>;
   const total = stats.byMember.reduce((n, m) => n + m.count, 0);
   return (
@@ -155,7 +158,6 @@ export function StatsView({ items, now }: { items: Item[]; now: number }) {
           </li>
         ))}
       </ul>
-      <p className="hint">Counts use each item's last 50 Completions.</p>
     </div>
   );
 }
@@ -171,7 +173,7 @@ export function SavedViewBody({ view, items, now, actions, filter }: {
   if (layout === "today") return <TodayView items={matching} now={now} actions={actions} />;
   if (layout === "calendar") return <CalendarView items={matching} now={now} actions={actions} />;
   if (layout === "board") return <BoardView items={matching} now={now} actions={actions} group={view.boardGroup} />;
-  const list = sortItems(matching.filter((i) => !i.archived && status(i, now) !== "done"), view.sort ?? "urgency", now);
+  const list = sortItems(matching.filter((i) => isActive(i, now)), view.sort ?? "urgency", now);
   return (
     <ul className="items">
       {list.length === 0 && <li className="empty">No matches for this view.</li>}

@@ -73,6 +73,8 @@ function evalTerm(term: string, rec: Rec | undefined, names: Names, values: Valu
 
 /** Flat AND/OR with AND binding tighter; no parentheses or NOT. */
 function evalCondition(expr: string, rec: Rec | undefined, names: Names, values: Values) {
+  // `x BETWEEN a AND b` (key conditions) is `x >= a AND x <= b`.
+  expr = expr.replace(/(\S+)\s+BETWEEN\s+(\S+)\s+AND\s+(\S+)/g, "$1 >= $2 AND $1 <= $3");
   return expr.split(/\s+OR\s+/).some((clause) => clause.split(/\s+AND\s+/).every((t) => evalTerm(t, rec, names, values)));
 }
 

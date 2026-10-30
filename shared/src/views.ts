@@ -30,6 +30,7 @@ export const VIEW_LAYOUTS = ["list", "today", "board", "calendar"] as const;
 export type ViewLayout = (typeof VIEW_LAYOUTS)[number];
 export const SAVED_VIEWS_MAX = 20;
 export const VIEW_NAME_MAX = 40;
+export const VIEW_TAGS_MAX = 50;
 
 /** A Member's named filter, sort and layout; `pinned` ones show as tabs. Lives on their Profile. */
 export interface SavedView {
@@ -46,6 +47,11 @@ export interface SavedView {
 }
 
 const byOrder = (a: ViewTag, b: ViewTag) => (a.order ?? 99) - (b.order ?? 99) || a.name.localeCompare(b.name);
+
+/** Still on the lists: not Archived, and not a finished Task. */
+export function isActive(item: Item, now: number): boolean {
+  return !item.archived && status(item, now) !== "done";
+}
 
 /** Tags of one Tag group in display order. */
 export function tagsInGroup(tags: ViewTag[], group: string): ViewTag[] {
@@ -105,16 +111,20 @@ export interface CalendarDay {
   entries: CalendarEntry[];
 }
 
-/** Next due points of an Item from its current Next due up to `end` (exclusive). */
-export function dueDates(item: Item, end: number): number[] {
-  if (item.archived || (item.kind === "task" && item.lastDoneAt !== undefined)) return [];
+/**
+ * Due points of an Item up to `end` (exclusive): its current Next due, then the ones after it. An
+ * overdue Chore's later due points count from `now`, since a missed one doesn't move the next ones
+ * earlier (and a long-overdue hourly Chore doesn't step through months).
+ */
+export function dueDates(item: Item, end: number, now: number): number[] {
+  if (!isActive(item, now)) return [];
   const first = schedule(item).nextDue;
   if (first === null) return [];
   if (item.kind === "task") return first < end ? [first] : [];
   const rec = item.recurrence;
-  const next = rec.type === "interval" ? (t: number) => t + intervalMs(rec) : (t: number) => nextOccurrence(rec, t);
+  const after = rec.type === "interval" ? (t: number) => t + intervalMs(rec) : (t: number) => nextOccurrence(rec, t);
   const out: number[] = [];
-  for (let t = first; t < end; t = next(t)) out.push(t);
+  for (let t = first; t < end; t = after(Math.max(t, now))) out.push(t);
   return out;
 }
 
@@ -123,7 +133,7 @@ export function dueDates(item: Item, end: number): number[] {
  * forward from their Next due) and past Completions. Completions of items not in `items` (not
  * visible, or deleted) are left out.
  */
-export function calendarDays(items: Item[], completions: Completion[], start: number, days: number): CalendarDay[] {
+export function calendarDays(items: Item[], completions: Completion[], start: number, days: number, now: number): CalendarDay[] {
   const s = toWall(start);
   const out: CalendarDay[] = [];
   for (let n = 0; n < days; n++) {
@@ -138,7 +148,7 @@ export function calendarDays(items: Item[], completions: Completion[], start: nu
   };
   const byId = new Map(items.map((i) => [i.id, i]));
   for (const item of items) {
-    for (const at of dueDates(item, end)) dayOf(at)?.entries.push({ kind: "due", itemId: item.id, title: item.title, at });
+    for (const at of dueDates(item, end, now)) dayOf(at)?.entries.push({ kind: "due", itemId: item.id, title: item.title, at });
   }
   for (const c of completions) {
     const item = byId.get(c.itemId);
@@ -158,7 +168,7 @@ export function calendarDays(items: Item[], completions: Completion[], start: nu
 export function tagBoard(items: Item[], tags: ViewTag[], group: string, now: number): TagColumn[] {
   const order = tagsInGroup(tags, group);
   const active = items
-    .filter((i) => !i.archived && status(i, now) !== "done")
+    .filter((i) => isActive(i, now))
     .sort((a, b) => urgency(a, now) - urgency(b, now));
   const inGroup = new Set(order.map((t) => t.id));
   return [

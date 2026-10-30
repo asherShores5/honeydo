@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { status, unreadActivity, urgency, type Item, type SavedView } from "@aubi/shared";
-import { completeItem, markActivitySeen, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
+import { VIEW_NAME_MAX, status, unreadActivity, urgency, type Item, type SavedView } from "@aubi/shared";
+import { completeItem, markActivitySeen, nameOf, saveViews as saveMyViews, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, newId } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
@@ -69,12 +69,12 @@ export function Home() {
   }, [tab, activeView]);
 
   function saveViews(next: SavedView[]) {
-    saveProfile({ savedViews: next }).catch(() => toast("Couldn't save your views. Check your connection."));
+    saveMyViews({ savedViews: next }).catch(() => toast("Couldn't save your views. Check your connection."));
   }
   function saveCurrentAsView() {
     const name = window.prompt("Name this view")?.trim();
     if (!name) return;
-    const view: SavedView = { id: newId(), name: name.slice(0, 40), tags: [...selected], who, sort: "urgency", layout: "list", pinned: true };
+    const view: SavedView = { id: newId(), name: name.slice(0, VIEW_NAME_MAX), tags: [...selected], who, sort: "urgency", layout: "list", pinned: true };
     saveViews([...savedViews, view]);
     setTab(`view:${view.id}`);
   }
@@ -104,7 +104,7 @@ export function Home() {
   const first = useRef(true);
   useEffect(() => {
     if (first.current) return void (first.current = false);
-    const t = setTimeout(() => void saveProfile({ defaultView: { id: "default", name: "Default", tags: [...selected], who } }).catch(() => {}), 1200);
+    const t = setTimeout(() => void saveMyViews({ defaultView: { id: "default", name: "Default", tags: [...selected], who } }).catch(() => {}), 1200);
     return () => clearTimeout(t);
   }, [selected, who]);
 

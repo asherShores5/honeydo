@@ -155,8 +155,9 @@ export class AppStack extends Stack {
     for (const field of [
       "putItem", "completeItem", "undoCompletion", "putTag", "deleteTag", "putProfile",
       "putPushSubscription", "deletePushSubscription",
-      // Not in any @aws_subscribe list: the partner must never learn when I read Activity.
-      "markActivitySeen",
+      // Not in any @aws_subscribe list: the partner must never learn when I read Activity, or see
+      // my Saved views.
+      "markActivitySeen", "saveViews",
     ]) {
       ds.createResolver(`M${field}`, { typeName: "Mutation", fieldName: field });
     }

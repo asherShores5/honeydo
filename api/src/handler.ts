@@ -11,7 +11,7 @@ import {
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
 import { fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
-  UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
+  UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
   validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
   type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
@@ -100,11 +100,10 @@ function itemOut(rec: Record<string, unknown>) {
 
 function profileOut(rec: Record<string, unknown>) {
   const p = strip<Record<string, unknown>>(rec);
-  for (const k of ["defaultView", "savedViews", "alertPrefs"]) p[k] = p[k] ?? null;
-  if (p.alertPrefs) p.alertPrefs = readAlertPrefs(p.alertPrefs);
+  p.alertPrefs = p.alertPrefs ? readAlertPrefs(p.alertPrefs) : null;
   // Own-only fields: the partner reads this Profile (snapshot, onProfileChange), so they are
   // always null here and only `me` fills them in (ownProfileOut).
-  p.activitySeenAt = p.lastHandoffAt = p.lastHandoffSince = null;
+  p.activitySeenAt = p.lastHandoffAt = p.lastHandoffSince = p.savedViews = p.defaultView = null;
   return p;
 }
 
@@ -116,6 +115,8 @@ function ownProfileOut(rec: Record<string, unknown>, handoff?: Record<string, un
   return {
     ...profileOut(rec),
     activitySeenAt: rec.activitySeenAt ?? null,
+    savedViews: rec.savedViews ?? null,
+    defaultView: rec.defaultView ?? null,
     lastHandoffAt: handoff?.lastHandoffAt ?? null,
     lastHandoffSince: handoff?.lastHandoffSince ?? null,
   };
@@ -249,10 +250,39 @@ async function snapshot(ctx: Ctx) {
   };
 }
 
-async function completions(ctx: Ctx, args: { itemId: string; limit?: number }) {
+/** Most Completions a `since` read returns: an hourly chore over 90 days is ~2,200. */
+const COMPLETIONS_SINCE_MAX = 5000;
+
+/**
+ * One item's Completions, newest first: the newest `limit` (default 50), or with `since` every one
+ * at or after it (History & stats, Calendar), up to COMPLETIONS_SINCE_MAX.
+ */
+async function completions(ctx: Ctx, args: { itemId: string; limit?: number; since?: number | null }) {
   await getItemFor(ctx, args.itemId);
-  const recs = await queryPrefix(`DONE#${args.itemId}#`, { limit: Math.min(args.limit ?? 50, 500), newestFirst: true });
-  return recs.map((r) => strip(r));
+  if (args.since == null) {
+    const recs = await queryPrefix(`DONE#${args.itemId}#`, { limit: Math.min(args.limit ?? 50, 500), newestFirst: true });
+    return recs.map((r) => strip(r));
+  }
+  const out: Record<string, unknown>[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "PK = :pk AND SK BETWEEN :from AND :to",
+        ExpressionAttributeValues: {
+          ":pk": PK,
+          ":from": completionKey(args.itemId, Math.max(0, args.since)),
+          ":to": completionKey(args.itemId, 999_999_999_999_999), // the largest 15-digit key
+        },
+        ScanIndexForward: false,
+        ExclusiveStartKey,
+      }),
+    );
+    out.push(...(r.Items ?? []));
+    ExclusiveStartKey = r.LastEvaluatedKey;
+  } while (ExclusiveStartKey && out.length < COMPLETIONS_SINCE_MAX);
+  return out.slice(0, COMPLETIONS_SINCE_MAX).map((r) => strip(r));
 }
 
 async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: number | null }) {
@@ -497,6 +527,25 @@ async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
  * forward and never past the server's now: a stale device can't bring old events back as unread,
  * and a fast device clock can't hide events still to come.
  */
+/**
+ * Save my Saved views and/or default view. Own-only: not in any @aws_subscribe list, and the
+ * result is my own Profile, so the partner never receives my view names or Tag picks.
+ */
+async function saveViews(ctx: Ctx, args: { savedViews?: unknown; defaultView?: unknown }) {
+  await profileRecord(ctx); // ensures the record exists
+  const fields = validateViewsInput(args);
+  const names = Object.keys(fields) as (keyof typeof fields)[];
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK, SK: `USER#${ctx.userId}` },
+      UpdateExpression: "SET " + names.map((k) => `${k} = :${k}`).join(", "),
+      ExpressionAttributeValues: Object.fromEntries(names.map((k) => [`:${k}`, fields[k]])),
+    }),
+  );
+  return me(ctx);
+}
+
 async function markActivitySeen(ctx: Ctx, args: { at: number }) {
   const at = Math.min(validateActivitySeenAt(args.at), Date.now());
   await profileRecord(ctx); // the Profile record exists
@@ -704,7 +753,7 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
 
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
-  putPushSubscription, deletePushSubscription, markActivitySeen,
+  putPushSubscription, deletePushSubscription, markActivitySeen, saveViews,
   ...FRIDGE_RESOLVERS,
   ...NOTE_TO_TASK_RESOLVERS,
   comments, addComment,

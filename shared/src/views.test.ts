@@ -65,7 +65,7 @@ describe("Calendar", () => {
       trash, // Tuesdays 20:00
       task("plumber", { dueAt: fromWall(2026, 10, 7, 10, 0) }),
       task("undated"),
-    ], [], start, 10);
+    ], [], start, 10, now);
     expect(days.map((d) => d.day)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
     expect(day(days, 6)).toEqual(["due:bath", "due:trash"]);
     expect(day(days, 7)).toEqual(["due:plumber"]);
@@ -80,18 +80,29 @@ describe("Calendar", () => {
       { itemId: "bath", by: "b", at: fromWall(2026, 10, 4, 19, 0) },
       { itemId: "bath", by: "a", at: fromWall(2026, 10, 4, 8, 0) },
       { itemId: "gone", by: "a", at: fromWall(2026, 10, 4, 9, 0) },
-    ], start, 3);
+    ], start, 3, now);
     expect(days[0].entries).toEqual([
       { kind: "done", itemId: "bath", title: "bath", at: fromWall(2026, 10, 4, 8, 0), by: "a" },
       { kind: "done", itemId: "bath", title: "bath", at: fromWall(2026, 10, 4, 19, 0), by: "b" },
     ]);
   });
 
+  it("projects an overdue Chore from now, not from its missed Next due", () => {
+    const days = calendarDays([chore("bath", fromWall(2026, 10, 3, 9, 0))], [], start, 10, now); // 2 days overdue
+    expect(days.filter((d) => d.entries.length).map((d) => d.day)).toEqual([8, 11]); // now + 3d, + 6d
+  });
+
+  it("stays bounded for a long-overdue hourly Chore", () => {
+    const hourly = chore("feed", now - 60 * DAY, { recurrence: { type: "interval", every: 1, unit: "hours" } });
+    const days = calendarDays([hourly], [], start, 2, now);
+    expect(days.flatMap((d) => d.entries)).toHaveLength(14); // hourly from now: Oct 5 10:00 to 23:00
+  });
+
   it("leaves out archived and finished items' due dates", () => {
     const days = calendarDays([
       chore("old", fromWall(2026, 10, 5, 12, 0), { archived: true }),
       task("finished", { dueAt: fromWall(2026, 10, 5, 12, 0), lastDoneAt: now - HOUR }),
-    ], [], start, 3);
+    ], [], start, 3, now);
     expect(days.flatMap((d) => d.entries)).toEqual([]);
   });
 });

@@ -151,7 +151,7 @@ function applyTag(t: Tag) {
 }
 
 /** Fields only `me` carries; the server sends them null on any Profile the partner can also read. */
-const OWN_ONLY = ["activitySeenAt", "lastHandoffAt", "lastHandoffSince"] as const;
+const OWN_ONLY = ["activitySeenAt", "lastHandoffAt", "lastHandoffSince", "savedViews", "defaultView"] as const;
 
 function applyProfile(raw: any) {
   const p = profileIn(raw);
@@ -350,10 +350,21 @@ export async function removeTag(id: string) {
   applyTag((await gql(Q.deleteTag, { id })).deleteTag);
 }
 
-export async function saveProfile(patch: Partial<Profile>) {
+/** Shared Profile fields (they fan out to the partner). Saved views go through saveViews. */
+export async function saveProfile(patch: Partial<Omit<Profile, "savedViews" | "defaultView">>) {
   const input: Record<string, unknown> = { ...patch };
-  for (const k of ["defaultView", "savedViews", "alertPrefs"]) if (k in input) input[k] = JSON.stringify(input[k]);
+  if ("alertPrefs" in input) input.alertPrefs = JSON.stringify(input.alertPrefs);
   applyProfile((await gql(Q.putProfile, { input })).putProfile);
+}
+
+/**
+ * Save my Saved views and/or default view (m5/05). Own-only: a separate mutation nothing fans out,
+ * so my partner never receives them. Other devices pick them up when they next load `me`.
+ */
+export async function saveViews(patch: Pick<Profile, "savedViews" | "defaultView">) {
+  const vars = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, v === undefined ? undefined : JSON.stringify(v)]));
+  const p = profileIn((await gql(Q.saveViews, vars)).saveViews);
+  if (state.me) set({ me: { ...state.me, savedViews: p.savedViews, defaultView: p.defaultView } });
 }
 
 /**
@@ -375,13 +386,17 @@ export async function loadCompletions(itemId: string) {
 
 /**
  * The newest Completions of several items in one request: aliased copies of the visibility-checked
- * `completions` read (the Handoff card's "done", m2/04). `limit` per item.
+ * `completions` read (the Handoff card's "done", m2/04). `limit` per item; with `since`, every
+ * Completion at or after it instead (History & stats, Calendar).
  */
-export async function loadCompletionsOf(itemIds: string[], limit = 20): Promise<Completion[]> {
+export async function loadCompletionsOf(itemIds: string[], limit = 20, since?: number): Promise<Completion[]> {
   if (!itemIds.length) return [];
-  const vars = itemIds.map((_, n) => `$i${n}: ID!`).join(", ");
-  const reads = itemIds.map((_, n) => `c${n}: completions(itemId: $i${n}, limit: ${limit}) { itemId at by }`).join(" ");
-  const data = await gql<Record<string, Completion[]>>(`query(${vars}) { ${reads} }`, Object.fromEntries(itemIds.map((id, n) => [`i${n}`, id])));
+  const vars = [...itemIds.map((_, n) => `$i${n}: ID!`), "$since: Float"].join(", ");
+  const reads = itemIds.map((_, n) => `c${n}: completions(itemId: $i${n}, limit: ${limit}, since: $since) { itemId at by }`).join(" ");
+  const data = await gql<Record<string, Completion[]>>(
+    `query(${vars}) { ${reads} }`,
+    { ...Object.fromEntries(itemIds.map((id, n) => [`i${n}`, id])), since: since ?? null },
+  );
   return Object.values(data).flat();
 }
 
