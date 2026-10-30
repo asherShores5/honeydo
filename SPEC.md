@@ -1,4 +1,4 @@
-# Aubi Honey — Shared To-Do App Spec
+# HoneyDo — Shared To-Do App Spec
 
 Status: v0.3 (2026-10-19) — **M1 deployed** (core) + parts of M2/M3
 
@@ -235,7 +235,7 @@ filtered in resolvers.
 The repo is public on GitHub by choice. Secrets stay out of it (`.secrets/` is gitignored).
 
 ```
-aubi-honey/
+honeydo/
   infra/        CDK app (stacks: Auth, Data, Api, Web, Notifier)
   schema/       schema.graphql
   shared/       status/recurrence logic, types (used by web + lambda)

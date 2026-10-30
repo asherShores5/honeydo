@@ -1,4 +1,4 @@
-# Honey Do 🐝
+# HoneyDo 🐝
 
 A shared chore & to-do app for two, built for a household with a baby. Chores reset when
 they're done, stay green until they're coming due, turn yellow, then red when overdue, and

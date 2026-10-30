@@ -1,4 +1,4 @@
-# Aubi Honey: Progress & Next Steps
+# HoneyDo: Progress & Next Steps
 
 _Updated 2026-10-29_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
 

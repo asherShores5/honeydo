@@ -59,7 +59,7 @@ async function main() {
     const dir = path.join(__dirname, "..", "..", ".secrets");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = path.join(dir, "initial-passwords.txt");
-    writeFileSync(file, `# Aubi Honey one-time sign-in passwords (${new Date().toISOString()})\n${lines.join("\n")}\n`, { mode: 0o600 });
+    writeFileSync(file, `# HoneyDo one-time sign-in passwords (${new Date().toISOString()})\n${lines.join("\n")}\n`, { mode: 0o600 });
     chmodSync(file, 0o600);
     console.log(`passwords written to ${file}`);
   }

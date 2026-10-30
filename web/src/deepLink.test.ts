@@ -37,7 +37,7 @@ describe("the notification the worker shows for a push", () => {
   it.each([["no payload", undefined], ["not JSON", "{oops"], ["no title", JSON.stringify({ body: "x" })], ["JSON null", "null"]])(
     "still shows a generic notification for %s",
     (_, raw) => {
-      expect(notificationFor(raw)).toEqual({ title: "Aubi Honey", options: { body: "Something needs you.", data: { url: "/" }, icon: "/icon-192.png" } });
+      expect(notificationFor(raw)).toEqual({ title: "HoneyDo", options: { body: "Something needs you.", data: { url: "/" }, icon: "/icon-192.png" } });
     },
   );
 });
