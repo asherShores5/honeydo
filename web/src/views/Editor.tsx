@@ -1,18 +1,15 @@
 import { useEffect, useState } from "react";
-import { COMMENT_MAX, DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
+import { COMMENT_MAX, DAY, HOUR, defaultWarnWindowFor, type Item, type Recurrence, type Severity } from "@aubi/shared";
 import { addComment, loadComments, loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
-import { ago, newId, toLocalInput, when } from "../format";
+import { ago, fromLocalInput, newId, span, toLocalInput, when } from "../format";
 import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
 import type { TaskDraft } from "../noteToTask";
+import { warnFromInput, warnToInput, type WarnUnit } from "../warnWindow";
+import { snoozeChoices } from "../rowActions";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 type Mode = "interval" | "weekly" | "monthly" | "once";
-
-function fromLocalInput(v: string): number | undefined {
-  const m = v.match(/^(\d+)-(\d+)-(\d+)T(\d+):(\d+)$/);
-  return m ? fromWall(+m[1], +m[2], +m[3], +m[4], +m[5]) : undefined;
-}
 
 /**
  * `prefill` pre-fills a new item as a one-off Task (m2/03: "Make Task" on a Note); `onSaved` hears
@@ -45,6 +42,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
   const [isPrivate, setPrivate] = useState(item ? item.visibility !== "shared" : false);
   const [notes, setNotes] = useState(item?.notes ?? prefill?.notes ?? "");
   const [lastDone, setLastDone] = useState("");
+  const [warn, setWarn] = useState(warnToInput(item?.warnWindow));
   const [history, setHistory] = useState<{ at: number; by: string; note?: string }[]>();
   // Comments (M2): loaded on open, then kept live by onCommentChange through the store.
   const comments = useStore((s) => (item ? s.comments[item.id] : undefined));
@@ -88,7 +86,8 @@ export function Editor({ item, prefill, onSaved, onClose }: {
     if (on) setAssignee(assigneeWhenPrivate(assignee, me.userId));
   }
 
-  const valid = title.trim() && (mode !== "weekly" || weekdays.length > 0);
+  const warnCheck = mode === "once" ? ({ ok: true, ms: item?.warnWindow } as const) : warnFromInput(warn.value, warn.unit, recurrence(mode));
+  const valid = title.trim() && (mode !== "weekly" || weekdays.length > 0) && warnCheck.ok;
 
   function save() {
     const id = item?.id ?? newId();
@@ -100,7 +99,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
       assigneeId: (isPrivate ? assigneeWhenPrivate(assignee, me.userId) : assignee) || undefined,
       visibility: (isPrivate ? `private:${me.userId}` : "shared") as Item["visibility"],
       severity: severity || undefined,
-      warnWindow: item?.warnWindow,
+      warnWindow: warnCheck.ok ? warnCheck.ms : undefined,
       snoozedUntil: item?.snoozedUntil,
       archived: live?.archived ?? false, // live: undoing a finished Task's Completion un-Archives it
     };
@@ -165,6 +164,21 @@ export function Editor({ item, prefill, onSaved, onClose }: {
         {mode === "once" && (
           <label>Due <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
         )}
+        {mode !== "once" && (() => {
+          const fallback = span(defaultWarnWindowFor(recurrence(mode)));
+          return (
+          <div className="row">
+            Turn yellow
+            <input type="number" min={1} className="num" value={warn.value} placeholder={fallback}
+              onChange={(e) => setWarn({ ...warn, value: e.target.value })} aria-label="Warn window" />
+            <select value={warn.unit} onChange={(e) => setWarn({ ...warn, unit: e.target.value as WarnUnit })}>
+              <option value="hours">hours</option><option value="days">days</option>
+            </select>
+            <span className="hint">before it's due{warn.value ? "" : ` (default ${fallback})`}</span>
+            {!warnCheck.ok && <span className="error">{warnCheck.error}</span>}
+          </div>
+          );
+        })()}
         {!item && mode !== "once" && (
           <label>Last done <small>(optional — otherwise it's due now)</small>
             <input type="datetime-local" value={lastDone} max={toLocalInput(Date.now())} onChange={(e) => setLastDone(e.target.value)} />
@@ -210,9 +224,10 @@ export function Editor({ item, prefill, onSaved, onClose }: {
         {item && live && (
           <>
             <div className="row actions">
-              <button onClick={() => (snooze(item.id, Date.now() + DAY), onClose())}>Snooze 1 day</button>
+              {snoozeChoices(Date.now()).map((c) => (
+                <button key={c.label} onClick={() => (snooze(item.id, c.until), onClose())}>Snooze {c.label.toLowerCase()}</button>
+              ))}
               {live.snoozedUntil && <button onClick={() => snooze(item.id, undefined)}>Unsnooze</button>}
-              <button onClick={() => (snooze(item.id, Date.now() + 3 * HOUR), onClose())}>Snooze 3h</button>
             </div>
             <h3>History</h3>
             <ul className="history">

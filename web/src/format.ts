@@ -1,4 +1,4 @@
-import { DAY, HOUR, TZ } from "@aubi/shared";
+import { DAY, HOUR, TZ, fromWall } from "@aubi/shared";
 
 export function span(ms: number): string {
   const a = Math.abs(ms);
@@ -25,6 +25,12 @@ export function toLocalInput(t: number): string {
       .map((x) => [x.type, x.value]),
   );
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
+
+/** Epoch ms from a <input type=datetime-local> value read as Pacific; undefined if empty or malformed. */
+export function fromLocalInput(v: string): number | undefined {
+  const m = v.match(/^(\d+)-(\d+)-(\d+)T(\d+):(\d+)$/);
+  return m ? fromWall(+m[1], +m[2], +m[3], +m[4], +m[5]) : undefined;
 }
 
 export function slug(s: string) {

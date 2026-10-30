@@ -1,13 +1,54 @@
 import type { Item, Recurrence, Status } from "./types";
 import { DAY, HOUR, fromWall, parseHHMM, toWall } from "./time";
 
-const UNIT_MS = { hours: HOUR, days: DAY, weeks: 7 * DAY } as const;
+export const UNIT_MS = { hours: HOUR, days: DAY, weeks: 7 * DAY } as const;
 
 type IntervalRec = Extract<Recurrence, { type: "interval" }>;
 
 /** An Interval's length in ms. */
 export function intervalMs(rec: IntervalRec): number {
   return rec.every * UNIT_MS[rec.unit];
+}
+
+/** Days between neighbouring entries of `days` on a cycle of `cycle` days (sorted, deduped). */
+function shortestGap(days: readonly number[], cycle: number): number {
+  const d = [...new Set(days)].sort((a, b) => a - b);
+  let gap = cycle;
+  for (let i = 0; i < d.length; i++) gap = Math.min(gap, (d[(i + 1) % d.length] - d[i] + cycle) % cycle || cycle);
+  return gap;
+}
+
+/** A month's shortest length: monthly schedules are capped as if every month had 28 days. */
+const SHORTEST_MONTH_DAYS = 28;
+
+/**
+ * The longest Warn window a Chore may override to: its Interval, or a Calendar schedule's
+ * shortest gap between Occurrences. Longer would mean "always yellow".
+ */
+export function warnWindowMax(rec: Recurrence): number {
+  if (rec.type === "interval") return intervalMs(rec);
+  if (rec.freq === "weekly") return shortestGap(rec.byWeekday, 7) * DAY;
+  return shortestGap(rec.byMonthDay.map((d) => Math.min(d, SHORTEST_MONTH_DAYS)), SHORTEST_MONTH_DAYS) * DAY;
+}
+
+/** A Task's Warn window can lead its due date by at most a year. */
+export const TASK_WARN_MAX = 365 * DAY;
+
+/**
+ * Why a Warn window override can't be saved, or null if it can. One rule for the Editor and the
+ * server (m6/04). `rec` undefined = a Task.
+ */
+export function warnWindowProblem(ms: number, rec: Recurrence | undefined): string | null {
+  if (!Number.isFinite(ms) || ms <= 0) return "The Warn window must be more than 0.";
+  if (ms > (rec ? warnWindowMax(rec) : TASK_WARN_MAX)) {
+    return rec ? "The Warn window can't be longer than the gap between due dates." : "The Warn window can be at most a year.";
+  }
+  return null;
+}
+
+/** The Warn window a Recurrence gets without an override (a Calendar schedule's shortest gap). */
+export function defaultWarnWindowFor(rec: Recurrence): number {
+  return defaultWarnWindow(warnWindowMax(rec));
 }
 
 /** SPEC §4.2: max(1 day, 10% of interval), capped at 50% of interval for short chores. */

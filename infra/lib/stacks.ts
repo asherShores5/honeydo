@@ -341,6 +341,8 @@ export function response(ctx) {
           clientId: client.userPoolClientId,
           graphqlUrl: api.graphqlUrl,
           usernames: USERNAMES,
+          // The passkey relying party (m6/05): Settings flags passkeys made for any other domain.
+          passkeyDomain: APP_DOMAIN,
           // From the VapidKeys resource, not an SSM reference: CloudFormation resolves SSM references
           // before any resource runs, so on the first deploy the parameter wouldn't exist yet.
           vapidPublicKey: vapidKeys.getAttString("publicKey"),
