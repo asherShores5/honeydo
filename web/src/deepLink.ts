@@ -23,7 +23,7 @@ export interface ShownNotification {
 }
 
 const ICON = "/icon-192.png";
-const FALLBACK: ShownNotification = { title: "Aubi Honey", options: { body: "Something needs you.", data: { url: "/" }, icon: ICON } };
+const FALLBACK: ShownNotification = { title: "HoneyDo", options: { body: "Something needs you.", data: { url: "/" }, icon: ICON } };
 
 /**
  * The notification for a push's text (a PushPayload from @aubi/shared notify.ts). Never throws

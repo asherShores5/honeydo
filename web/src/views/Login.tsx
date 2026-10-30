@@ -26,7 +26,7 @@ export function Login() {
   return (
     <div className="login">
       <img src="/icon.svg" alt="" width={88} height={88} />
-      <h1>Aubi Honey</h1>
+      <h1>HoneyDo</h1>
       <div className="seg">
         {usernames.map((u) => (
           <button key={u} className={u === username ? "on" : ""} onClick={() => setUsername(u)}>

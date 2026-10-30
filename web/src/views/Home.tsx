@@ -155,7 +155,7 @@ export function Home() {
   return (
     <div className="app" data-density={me.density ?? "cards"}>
       <header>
-        <h1>Aubi Honey</h1>
+        <h1>HoneyDo</h1>
         <span className={`sync ${!online ? "off" : live ? "live" : ""}`} title={!online ? "Offline" : live ? "Live" : "Connecting"}>
           {!online ? `offline${pending ? ` · ${pending} queued` : ""}` : pending ? "saving…" : ""}
         </span>
