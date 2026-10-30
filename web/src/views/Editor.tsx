@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
-import { loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
+import { COMMENT_MAX, DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
+import { addComment, loadComments, loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
 import { ago, newId, toLocalInput, when } from "../format";
 import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
+import type { TaskDraft } from "../noteToTask";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 type Mode = "interval" | "weekly" | "monthly" | "once";
@@ -13,15 +14,24 @@ function fromLocalInput(v: string): number | undefined {
   return m ? fromWall(+m[1], +m[2], +m[3], +m[4], +m[5]) : undefined;
 }
 
-export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) {
+/**
+ * `prefill` pre-fills a new item as a one-off Task (m2/03: "Make Task" on a Note); `onSaved` hears
+ * which item was saved, after its putItem is queued.
+ */
+export function Editor({ item, prefill, onSaved, onClose }: {
+  item?: Item;
+  prefill?: TaskDraft;
+  onSaved?: (saved: Pick<Item, "id" | "kind" | "visibility">) => void;
+  onClose: () => void;
+}) {
   const me = useStore((s) => s.me!);
   const profiles = useStore((s) => s.profiles);
   const tags = useStore((s) => s.tags);
   const live = useStore((s) => (item ? s.items[item.id] : undefined)) ?? item;
 
   const rec = item?.recurrence;
-  const [title, setTitle] = useState(item?.title ?? "");
-  const [mode, setMode] = useState<Mode>(item?.kind === "task" ? "once" : rec?.type === "calendar" ? rec.freq : "interval");
+  const [title, setTitle] = useState(item?.title ?? prefill?.title ?? "");
+  const [mode, setMode] = useState<Mode>(item?.kind === "task" || (!item && prefill) ? "once" : rec?.type === "calendar" ? rec.freq : "interval");
   const [every, setEvery] = useState(rec?.type === "interval" ? rec.every : 3);
   const [unit, setUnit] = useState<"hours" | "days" | "weeks">(rec?.type === "interval" ? rec.unit : "days");
   const [weekdays, setWeekdays] = useState<number[]>(rec?.type === "calendar" && rec.freq === "weekly" ? [...rec.byWeekday] : [new Date().getDay()]);
@@ -31,10 +41,36 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
   const [selTags, setSelTags] = useState(new Set(item?.tags ?? []));
   const [assignee, setAssignee] = useState(item?.assigneeId ?? "");
   const [severity, setSeverity] = useState<Severity | "">(item?.severity ?? "");
+  // A new item (a prefill from a Note included) starts shared.
   const [isPrivate, setPrivate] = useState(item ? item.visibility !== "shared" : false);
-  const [notes, setNotes] = useState(item?.notes ?? "");
+  const [notes, setNotes] = useState(item?.notes ?? prefill?.notes ?? "");
   const [lastDone, setLastDone] = useState("");
   const [history, setHistory] = useState<{ at: number; by: string; note?: string }[]>();
+  // Comments (M2): loaded on open, then kept live by onCommentChange through the store.
+  const comments = useStore((s) => (item ? s.comments[item.id] : undefined));
+  const [draft, setDraft] = useState("");
+  const [draftId, setDraftId] = useState(newId);
+  const [posting, setPosting] = useState(false);
+  const [commentError, setCommentError] = useState("");
+
+  useEffect(() => {
+    if (item) loadComments(item.id).catch(() => setCommentError("Couldn't load comments."));
+  }, [item]);
+
+  async function postComment() {
+    if (!item || !draft.trim() || posting) return;
+    setPosting(true);
+    setCommentError("");
+    try {
+      await addComment(item.id, draftId, draft.trim());
+      setDraft("");
+      setDraftId(newId());
+    } catch (e) {
+      setCommentError(`Couldn't post: ${(e as Error).message.replace(/^\w+Error: /, "")}`);
+    } finally {
+      setPosting(false);
+    }
+  }
 
   useEffect(() => {
     if (item) loadCompletions(item.id).then(setHistory, () => setHistory([]));
@@ -76,6 +112,7 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
     // New chores can start from "last done": otherwise they're due immediately.
     const ld = fromLocalInput(lastDone);
     if (!item && ld && mode !== "once") completeItem(id, ld);
+    onSaved?.({ id, kind: mode === "once" ? "task" : "chore", visibility: common.visibility });
     onClose();
   }
 
@@ -189,6 +226,22 @@ export function Editor({ item, onClose }: { item?: Item; onClose: () => void }) 
                 </li>
               ))}
             </ul>
+            <h3>Comments</h3>
+            <ul className="history comments">
+              {comments === undefined && !commentError && <li>Loading…</li>}
+              {comments?.length === 0 && <li>No comments yet.</li>}
+              {comments?.map((c) => (
+                <li key={c.id}>
+                  <b>{nameOf(c.by)}</b> <q>{c.text}</q> <small>({ago(c.at)})</small>
+                </li>
+              ))}
+            </ul>
+            <div className="row">
+              <input placeholder="Add a comment" value={draft} maxLength={COMMENT_MAX} onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void postComment()} />
+              <button disabled={posting || !draft.trim()} onClick={() => void postComment()}>Post</button>
+            </div>
+            {commentError && <small className="error">{commentError}</small>}
             {!live.archived && <button className="danger" onClick={() => (saveItem({ ...toInput(live), archived: true }), onClose())}>Archive</button>}
           </>
         )}

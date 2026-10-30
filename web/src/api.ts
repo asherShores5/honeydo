@@ -12,13 +12,21 @@ const ITEM = `id kind title notes tags assigneeId visibility severity recurrence
   lastDoneAt lastDoneBy snoozedUntil archived createdBy createdAt updatedAt version`;
 const TAG = `id name group color order deleted updatedAt`;
 const PROFILE = `userId username displayName color theme density defaultView savedViews alertPrefs setupComplete updatedAt`;
+// Own-only fields: the server fills them on `me` only (null on any Profile the partner reads).
+const ME = `${PROFILE} activitySeenAt lastHandoffAt lastHandoffSince`;
 // Subscriptions only receive fields the mutation selected, so all item mutations share this.
 const CHANGE = `item { ${ITEM} } visibility removedFor redacted`;
+// Fridge Notes (m2/02): every Note mutation selects all of these, so onNoteChange gets them all.
+const NOTE = `id text by at pinned expiresAt visibility updatedAt taskId`;
+
+const COMMENT = `id itemId at by text`;
+const COMMENT_CHANGE = `comment { ${COMMENT} } visibility`;
 
 export const Q = {
-  me: `query { me { ${PROFILE} } }`,
+  me: `query { me { ${ME} } }`,
+  markActivitySeen: `mutation($at: Float!) { markActivitySeen(at: $at) }`,
   snapshot: `query { snapshot { items { ${ITEM} } tags { ${TAG} } profiles { ${PROFILE} }
-    feed { id at by type itemId title detail } serverTime } }`,
+    feed { id at by type itemId title detail } fridgeNotes { ${NOTE} } serverTime } }`,
   completions: `query($itemId: ID!, $limit: Int) { completions(itemId: $itemId, limit: $limit) { itemId at by note } }`,
   putItem: `mutation($input: ItemInput!, $expectedVersion: Int) { putItem(input: $input, expectedVersion: $expectedVersion) { ${CHANGE} } }`,
   completeItem: `mutation($itemId: ID!, $at: Float, $note: String) { completeItem(itemId: $itemId, at: $at, note: $note) { ${CHANGE} } }`,
@@ -29,9 +37,21 @@ export const Q = {
   putPushSubscription: `mutation($deviceId: ID!, $endpoint: String!, $p256dh: String!, $auth: String!) {
     putPushSubscription(deviceId: $deviceId, endpoint: $endpoint, p256dh: $p256dh, auth: $auth) { deviceId enabled } }`,
   deletePushSubscription: `mutation($deviceId: ID!) { deletePushSubscription(deviceId: $deviceId) { deviceId enabled } }`,
+  // ---- Comments (M2) ----
+  comments: `query($itemId: ID!) { comments(itemId: $itemId) { ${COMMENT} } }`,
+  addComment: `mutation($itemId: ID!, $id: ID!, $text: String!) { addComment(itemId: $itemId, id: $id, text: $text) { ${COMMENT_CHANGE} } }`,
+  onCommentChange: `subscription { onCommentChange { ${COMMENT_CHANGE} } }`,
   onItemChange: `subscription { onItemChange { ${CHANGE} } }`,
   onTagChange: `subscription { onTagChange { ${TAG} } }`,
   onProfileChange: `subscription { onProfileChange { ${PROFILE} } }`,
+  // ---- Fridge Notes (m2/02) ----
+  postNote: `mutation($id: ID!, $text: String!, $pinned: Boolean, $expiresAt: Float) {
+    postNote(id: $id, text: $text, pinned: $pinned, expiresAt: $expiresAt) { ${NOTE} } }`,
+  pinNote: `mutation($id: ID!, $pinned: Boolean!) { pinNote(id: $id, pinned: $pinned) { ${NOTE} } }`,
+  setNoteExpiry: `mutation($id: ID!, $expiresAt: Float) { setNoteExpiry(id: $id, expiresAt: $expiresAt) { ${NOTE} } }`,
+  onNoteChange: `subscription { onNoteChange { ${NOTE} } }`,
+  // ---- Note to Task (m2/03) ----
+  markNoteTasked: `mutation($id: ID!, $taskId: ID!) { markNoteTasked(id: $id, taskId: $taskId) { ${NOTE} } }`,
 };
 
 /** One call may take this long before it counts as offline, so a weak bar can't hang the app. */

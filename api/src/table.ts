@@ -7,8 +7,12 @@ export const PK = "HH#aubi";
 export const pushKey = (userId: string, deviceId: string) => `PUSH#${userId}#${deviceId}`;
 /** The last Ding one Member got about one Item. */
 export const nstateKey = (itemId: string, userId: string) => `NSTATE#${itemId}#${userId}`;
+/** One Comment on one Item. `commentKey(itemId, "")` is the prefix of all of that Item's Comments. */
+export const commentKey = (itemId: string, commentId: string) => `CMT#${itemId}#${commentId}`;
 /** When one Member's last Handoff was sent. */
 export const handoffKey = (userId: string) => `HANDOFF#${userId}`;
+/** One Note on the Fridge (m2/02). */
+export const noteKey = (noteId: string) => `NOTE#${noteId}`;
 
 /**
  * Use as `.then(ok, ifConditionFailed(x))`: a failed ConditionExpression gives `x`, and so does a

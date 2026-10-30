@@ -1,8 +1,9 @@
 // App state: server snapshot + live updates + a persisted offline outbox.
 import { useSyncExternalStore } from "react";
-import type { AlertPrefs, Item } from "@aubi/shared";
+import type { AlertPrefs, Completion, Item, Note } from "@aubi/shared";
 import { ApiError, Q, Realtime, gql } from "./api";
 import { currentUsername } from "./auth";
+import { applyCommentChange, dropItemActivity, type Comment, type CommentChange } from "./comments";
 import { applyItemChange, type ItemChange } from "./itemChange";
 import { showCachedFirst } from "./launch";
 import { keepPending, type ItemInput, type Op } from "./outbox";
@@ -20,6 +21,12 @@ export type Who = "anyone" | "mine" | "partner" | "unassigned";
 export interface Profile {
   userId: string; username: string; displayName?: string; color?: string; theme?: string; density?: string;
   defaultView?: SavedView | null; savedViews?: SavedView[] | null; alertPrefs?: AlertPrefsPatch | null;
+  // Own only (on `me`; the server sends them null elsewhere):
+  /** When I last opened Activity (server ms). Read with `unreadActivity`. */
+  activitySeenAt?: number | null;
+  /** When my last Handoff push was sent, and the start of the "done" window it covered. */
+  lastHandoffAt?: number | null;
+  lastHandoffSince?: number | null;
   setupComplete: boolean; updatedAt: number;
 }
 export interface FeedEvent { id: string; at: number; by: string; type: string; itemId?: string; title?: string; detail?: string }
@@ -31,6 +38,10 @@ interface State {
   tags: Record<string, Tag>;
   profiles: Record<string, Profile>;
   feed: FeedEvent[];
+  /** Comments of Items opened this session, by Item ID. Not cached: the item screen reloads them. */
+  comments: Record<string, Comment[]>;
+  /** Fridge Notes by id, expired ones included; show them through the shared fridgeNotes(list, now). */
+  fridgeNotes: Record<string, Note>;
   online: boolean;
   live: boolean;
   outbox: Op[];
@@ -42,7 +53,7 @@ const OUTBOX = "aubi.outbox.v1";
 
 let state: State = {
   ready: false,
-  items: {}, tags: {}, profiles: {}, feed: [],
+  items: {}, tags: {}, profiles: {}, feed: [], fridgeNotes: {}, comments: {},
   online: navigator.onLine, live: false,
   outbox: JSON.parse(localStorage.getItem(OUTBOX) ?? "[]"),
   ...JSON.parse(localStorage.getItem(CACHE) ?? "{}"),
@@ -52,9 +63,9 @@ const listeners = new Set<() => void>();
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
   if ("outbox" in patch) localStorage.setItem(OUTBOX, JSON.stringify(state.outbox));
-  if ("items" in patch || "tags" in patch || "profiles" in patch || "feed" in patch || "me" in patch) {
-    const { me, items, tags, profiles, feed } = state;
-    localStorage.setItem(CACHE, JSON.stringify({ me, items, tags, profiles, feed }));
+  if ("items" in patch || "tags" in patch || "profiles" in patch || "feed" in patch || "fridgeNotes" in patch || "me" in patch) {
+    const { me, items, tags, profiles, feed, fridgeNotes } = state;
+    localStorage.setItem(CACHE, JSON.stringify({ me, items, tags, profiles, feed, fridgeNotes }));
   }
   listeners.forEach((l) => l());
 }
@@ -111,6 +122,16 @@ function applyItem(change: ItemChange, ownResult = false) {
     refresh: () => void refresh().catch(() => {}),
   });
   if (items !== state.items) set({ items });
+  const me = state.me?.userId;
+  if (me && change.removedFor?.includes(me)) {
+    const { comments, feed } = dropItemActivity(state, change.item.id);
+    set({ comments, feed });
+  }
+}
+
+function applyComment(change: CommentChange) {
+  const next = applyCommentChange(state, change, state.items[change.comment.itemId]?.title);
+  if (next !== state) set({ comments: next.comments, feed: next.feed });
 }
 
 function applyTag(t: Tag) {
@@ -130,9 +151,13 @@ function applyTag(t: Tag) {
   void refresh().catch(() => {});
 }
 
+/** Fields only `me` carries; the server sends them null on any Profile the partner can also read. */
+const OWN_ONLY = ["activitySeenAt", "lastHandoffAt", "lastHandoffSince"] as const;
+
 function applyProfile(raw: any) {
   const p = profileIn(raw);
-  set({ profiles: { ...state.profiles, [p.userId]: p }, ...(state.me?.userId === p.userId ? { me: p } : {}) });
+  const mine = state.me?.userId === p.userId ? { ...p, ...Object.fromEntries(OWN_ONLY.map((k) => [k, state.me![k]])) } : undefined;
+  set({ profiles: { ...state.profiles, [p.userId]: p }, ...(mine ? { me: mine } : {}) });
 }
 
 /** `serverCopyOf`: take this item from the server even if it has pending ops (conflict replay). */
@@ -150,6 +175,7 @@ export async function refresh(serverCopyOf?: string) {
       tags: Object.fromEntries(snapshot.tags.map((t: Tag) => [t.id, clean(t)])),
       profiles,
       feed: snapshot.feed.map(clean),
+      fridgeNotes: Object.fromEntries(snapshot.fridgeNotes.map((n: Note) => [n.id, clean(n)])),
       online: true,
     });
   } catch (e) {
@@ -185,6 +211,8 @@ export async function start() {
   rt.subscribe(Q.onItemChange, (c) => c && applyItem(c));
   rt.subscribe(Q.onTagChange, (t) => t && applyTag(t));
   rt.subscribe(Q.onProfileChange, (p) => p && applyProfile(p));
+  rt.subscribe(Q.onCommentChange, (c) => c && applyComment(c));
+  rt.subscribe(Q.onNoteChange, (n) => n && applyNote(n));
   void rt.connect().catch(() => {});
 
   const resume = () => {
@@ -199,7 +227,7 @@ export async function start() {
 
 /** Drop everything held for the last Member, in memory too, so the next sign-in starts clean. */
 function reset() {
-  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], online: navigator.onLine, live: false, outbox: [] };
+  state = { ready: false, items: {}, tags: {}, profiles: {}, feed: [], fridgeNotes: {}, comments: {}, online: navigator.onLine, live: false, outbox: [] };
   listeners.forEach((l) => l());
 }
 
@@ -214,7 +242,7 @@ export function stop() {
 
 let flushing = false;
 
-async function send(op: Op) {
+async function send(op: Exclude<Op, { type: "markNoteTasked" }>) {
   if (op.type === "putItem") {
     // flush runs after a refresh on resume, so state.tags reflects Tags deleted while offline.
     const input = {
@@ -235,8 +263,8 @@ export async function flush() {
     while (state.outbox.length) {
       const op = state.outbox[0];
       try {
-        const change = await send(op);
-        applyItem(change, true);
+        if (op.type === "markNoteTasked") applyNote((await gql(Q.markNoteTasked, { id: op.noteId, taskId: op.itemId })).markNoteTasked);
+        else applyItem(await send(op), true);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         if (e.kind === "network") {
@@ -329,12 +357,119 @@ export async function saveProfile(patch: Partial<Profile>) {
   applyProfile((await gql(Q.putProfile, { input })).putProfile);
 }
 
+/**
+ * Opening Activity: clear the unread marker here at once, then save last seen so my other devices
+ * clear too when they next load `me`. Its own mutation, which nothing fans out, so the partner
+ * never learns when I read Activity. `at` is the newest entry's server time, so device clocks don't
+ * matter. If the save fails (offline) the next open saves it again.
+ */
+export function markActivitySeen(at: number) {
+  const me = state.me;
+  if (!me || (me.activitySeenAt ?? 0) >= at) return;
+  set({ me: { ...me, activitySeenAt: at } });
+  void gql(Q.markActivitySeen, { at }).catch(() => {});
+}
+
 export async function loadCompletions(itemId: string) {
   return (await gql(Q.completions, { itemId, limit: 50 })).completions as { itemId: string; at: number; by: string; note?: string }[];
+}
+
+/**
+ * The newest Completions of several items in one request: aliased copies of the visibility-checked
+ * `completions` read (the Handoff card's "done", m2/04). `limit` per item.
+ */
+export async function loadCompletionsOf(itemIds: string[], limit = 20): Promise<Completion[]> {
+  if (!itemIds.length) return [];
+  const vars = itemIds.map((_, n) => `$i${n}: ID!`).join(", ");
+  const reads = itemIds.map((_, n) => `c${n}: completions(itemId: $i${n}, limit: ${limit}) { itemId at by }`).join(" ");
+  const data = await gql<Record<string, Completion[]>>(`query(${vars}) { ${reads} }`, Object.fromEntries(itemIds.map((id, n) => [`i${n}`, id])));
+  return Object.values(data).flat();
+}
+
+// ---- Comments (M2) ----------------------------------------------------------
+
+export async function loadComments(itemId: string) {
+  const list = (await gql(Q.comments, { itemId })).comments as Comment[];
+  set({ comments: { ...state.comments, [itemId]: list } });
+}
+
+/**
+ * Online only (no outbox): the caller shows the error and keeps the draft. Retrying with the same
+ * `id` (a new one per draft) can't post the Comment twice.
+ */
+export async function addComment(itemId: string, id: string, text: string) {
+  applyComment((await gql(Q.addComment, { itemId, id, text })).addComment);
 }
 
 export function nameOf(userId?: string) {
   if (!userId) return "";
   const p = state.profiles[userId];
   return p?.displayName || p?.username || "someone";
+}
+
+// ---- Fridge Notes (m2/02) ---------------------------------------------------
+// Notes go straight to the server (no outbox): a post shows at once and is taken back if the
+// server refuses it. The client picks the ID, so a retried post never makes a second Note.
+
+/** Take a Note from the server or a live echo; an older copy never replaces a newer one. */
+function applyNote(raw: Note) {
+  const n = clean(raw);
+  const cur = state.fridgeNotes[n.id];
+  if (cur && cur.updatedAt > n.updatedAt) return;
+  set({ fridgeNotes: { ...state.fridgeNotes, [n.id]: n } });
+}
+
+type NoteMutation = "postNote" | "pinNote" | "setNoteExpiry";
+
+/** Run one Note mutation and take its result, read by the mutation's field name. */
+async function sendNote(field: NoteMutation, vars: object, undo: () => void) {
+  try {
+    applyNote((await gql<Record<NoteMutation, Note>>(Q[field], vars))[field]);
+  } catch (e) {
+    undo();
+    toast(`Couldn't save the Note: ${(e as Error).message.replace(/^\w+Error: /, "")}`);
+  }
+}
+
+export function postNote(text: string, opts: { pinned?: boolean; expiresAt?: number } = {}) {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const note: Note = {
+    id, text: text.trim(), by: state.me!.userId, at: now, pinned: !!opts.pinned, expiresAt: opts.expiresAt,
+    visibility: "shared", updatedAt: now,
+  };
+  set({ fridgeNotes: { ...state.fridgeNotes, [id]: note } });
+  return sendNote("postNote", { id, text, pinned: !!opts.pinned, expiresAt: opts.expiresAt ?? null }, () => {
+    const { [id]: _gone, ...rest } = state.fridgeNotes;
+    set({ fridgeNotes: rest });
+  });
+}
+
+function editNote(id: string, patch: Partial<Note>, field: NoteMutation, vars: object) {
+  const cur = state.fridgeNotes[id];
+  if (!cur) return;
+  set({ fridgeNotes: { ...state.fridgeNotes, [id]: { ...cur, ...patch } } });
+  return sendNote(field, vars, () => set({ fridgeNotes: { ...state.fridgeNotes, [id]: cur } }));
+}
+
+export function pinNote(id: string, pinned: boolean) {
+  return editNote(id, { pinned }, "pinNote", { id, pinned });
+}
+
+/** `expiresAt` undefined clears the expiry. */
+export function setNoteExpiry(id: string, expiresAt: number | undefined) {
+  return editNote(id, { expiresAt }, "setNoteExpiry", { id, expiresAt: expiresAt ?? null });
+}
+
+// ---- Note to Task (m2/03) ---------------------------------------------------
+
+/**
+ * Mark a Note as turned into the Task just saved. It goes through the outbox behind that Task's
+ * putItem, so it works offline and the server always has the Task first.
+ */
+export function markNoteTasked(noteId: string, taskId: string) {
+  const cur = state.fridgeNotes[noteId];
+  if (!cur || cur.taskId) return;
+  set({ fridgeNotes: { ...state.fridgeNotes, [noteId]: { ...cur, taskId } } });
+  enqueue({ id: crypto.randomUUID(), type: "markNoteTasked", noteId, itemId: taskId });
 }

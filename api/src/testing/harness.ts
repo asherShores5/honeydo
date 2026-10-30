@@ -34,7 +34,7 @@ export function appSyncEvent(member: Member, fieldName: string, args: Record<str
     claims: { sub: member.userId, "cognito:username": member.username },
     issuer: "test", sourceIp: [], defaultAuthStrategy: "ALLOW", groups: null,
   } satisfies AppSyncIdentityCognito;
-  const parentTypeName = ["me", "snapshot", "completions"].includes(fieldName) ? "Query" : "Mutation";
+  const parentTypeName = ["me", "snapshot", "completions", "comments"].includes(fieldName) ? "Query" : "Mutation";
   return {
     arguments: args,
     identity,
@@ -59,6 +59,15 @@ export function deliveredTo(change: { visibility: string; removedFor?: string[] 
   );
 }
 
+/**
+ * Whether an onNoteChange or onCommentChange subscriber receives this mutation result (a Note, or
+ * an addComment CommentChange). Mirrors VISIBILITY_FILTER in infra/lib/stacks.ts, which both
+ * subscriptions use: visibility in ["shared", "private:<sub>"]. Keep the two in step.
+ */
+function visibilityDeliveredTo(change: { visibility: string }, member: Member) {
+  return ["shared", `private:${member.userId}`].includes(change.visibility);
+}
+
 export function harness() {
   return {
     A: memberA,
@@ -71,5 +80,6 @@ export function harness() {
     call: (member: Member, fieldName: string, args: Record<string, unknown> = {}): Promise<any> =>
       handler(appSyncEvent(member, fieldName, args)),
     deliveredTo,
+    visibilityDeliveredTo,
   };
 }

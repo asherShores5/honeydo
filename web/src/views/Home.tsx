@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { schedule, status, urgency, type Item, type Status } from "@aubi/shared";
-import { completeItem, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
+import { schedule, status, unreadActivity, urgency, type Item, type Status } from "@aubi/shared";
+import { completeItem, markActivitySeen, nameOf, saveProfile, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, span } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
 import { Editor } from "./Editor";
@@ -9,8 +9,13 @@ import { finishedTasks } from "../finished";
 import { openItem } from "../openItem";
 import { consumePendingItem, usePendingItem } from "../openRequests";
 import { OpenedItem } from "./OpenedItem";
+import { HandoffCard } from "./HandoffCard";
+import { Fridge } from "./Fridge";
+import type { Note } from "@aubi/shared";
+import { markNoteTasked } from "../store";
+import { linksNote, taskDraft } from "../noteToTask";
 
-type Tab = "ontrack" | "overdue" | "finished" | "activity";
+type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge";
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -51,6 +56,12 @@ export function Home() {
   const [settings, setSettings] = useState(false);
   const [undo, setUndo] = useState<{ itemId: string; at: number; title: string } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
+  // m2/03: "Make Task" on a Note opens the Editor pre-filled; a Note's Task opens like a Ding's item.
+  const [fromNote, setFromNote] = useState<Note | null>(null);
+  function openTask(taskId: string) {
+    if (openItem(taskId, items, me.userId, Date.now())) setOpened(taskId);
+    else toast("That Task isn't here anymore.");
+  }
 
   // A tapped Ding asks to open its item (?item= on launch, or a worker message if already open).
   const pendingItem = usePendingItem();
@@ -73,6 +84,12 @@ export function Home() {
     const t = setTimeout(() => void saveProfile({ defaultView: { id: "default", name: "Default", tags: [...selected], who } }).catch(() => {}), 1200);
     return () => clearTimeout(t);
   }, [selected, who]);
+
+  // Unread marker on Activity: looking at the tab marks everything in it seen.
+  const unread = unreadActivity(feed, me.userId, me.activitySeenAt);
+  useEffect(() => {
+    if (tab === "activity" && feed.length) markActivitySeen(Math.max(...feed.map((e) => e.at)));
+  }, [tab, feed]);
 
   useEffect(() => {
     if (!undo) return;
@@ -120,11 +137,16 @@ export function Home() {
         </button>
       </header>
 
+      <HandoffCard now={now} />
+
       <nav className="tabs">
         <button className={tab === "ontrack" ? "on" : ""} onClick={() => setTab("ontrack")}>On track <b>{visible.ontrack.length}</b></button>
         <button className={tab === "overdue" ? "on red" : "red"} onClick={() => setTab("overdue")}>Overdue <b>{visible.overdue.length}</b></button>
         <button className={tab === "finished" ? "on" : ""} onClick={() => setTab("finished")}>Finished</button>
-        <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
+        <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
+          Activity{unread > 0 && <b className="unread" aria-label={`${unread} unread`}>{unread > 99 ? "99+" : unread}</b>}
+        </button>
+        <button className={tab === "fridge" ? "on" : ""} onClick={() => setTab("fridge")}>Fridge</button>
       </nav>
 
       {(tab === "ontrack" || tab === "overdue") && (
@@ -158,7 +180,9 @@ export function Home() {
       )}
 
       <main>
-        {tab === "activity" ? (
+        {tab === "fridge" ? (
+          <Fridge now={now} onMakeTask={setFromNote} onOpenTask={openTask} />
+        ) : tab === "activity" ? (
           <ul className="feed">
             {feed.length === 0 && <li className="empty">Nothing yet.</li>}
             {feed.map((e) => (
@@ -213,6 +237,13 @@ export function Home() {
         />
       )}
       {editing && <Editor item={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
+      {fromNote && (
+        <Editor
+          prefill={taskDraft(fromNote)}
+          onSaved={(s) => linksNote(s) && markNoteTasked(fromNote.id, s.id)}
+          onClose={() => setFromNote(null)}
+        />
+      )}
       {settings && <Settings onClose={() => setSettings(false)} />}
     </div>
   );

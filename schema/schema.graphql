@@ -77,6 +77,12 @@ type Profile {
   defaultView: AWSJSON
   savedViews: AWSJSON
   alertPrefs: AWSJSON
+  "Own only: when the Member last opened Activity (ms), set by markActivitySeen. Filled on `me`; null on any Profile the partner can read."
+  activitySeenAt: Float
+  "Own only, on `me`: when my last Handoff push was sent (HANDOFF record). Null elsewhere."
+  lastHandoffAt: Float
+  "Own only, on `me`: the start of the Done window that push covered. Null elsewhere."
+  lastHandoffSince: Float
   setupComplete: Boolean!
   updatedAt: Float!
 }
@@ -107,6 +113,8 @@ type Snapshot {
   tags: [Tag!]!
   profiles: [Profile!]!
   feed: [FeedEvent!]!
+  "The Fridge: unexpired Notes, pinned first, then newest first."
+  fridgeNotes: [Note!]!
   serverTime: Float!
 }
 
@@ -126,10 +134,45 @@ type PushDevice {
   enabled: Boolean!
 }
 
+"A short note on one Item (M2). Append-only. Seen only where both its Item's current Visibility and the Item's Visibility when it was written allow."
+type Comment {
+  id: ID!
+  itemId: ID!
+  at: Float!
+  by: String!
+  text: String!
+}
+
+"addComment fans out to subscribers through this envelope. visibility is the Item's when written (a replay: the narrower of that and the Item's now)."
+type CommentChange {
+  comment: Comment!
+  visibility: String!
+}
+
+# ---- Fridge Notes (m2/02) ----
+
+"One Note on the Fridge. Append-only: after postNote only pinned and expiresAt change."
+type Note {
+  id: ID!
+  text: String!
+  by: String!
+  at: Float!
+  pinned: Boolean!
+  "Epoch ms; hidden from then on. Null = never expires."
+  expiresAt: Float
+  "Always shared; carried so the subscription filter matches Items'."
+  visibility: String!
+  updatedAt: Float!
+  "The Task this Note was turned into (m2/03). Null = not turned into a Task."
+  taskId: ID
+}
+
 type Query {
   me: Profile!
   snapshot: Snapshot!
   completions(itemId: ID!, limit: Int): [Completion!]!
+  "The Item's Comments, oldest first. NotFound if the caller can't see the Item."
+  comments(itemId: ID!): [Comment!]!
 }
 
 type Mutation {
@@ -144,10 +187,23 @@ type Mutation {
   putPushSubscription(deviceId: ID!, endpoint: String!, p256dh: String!, auth: String!): PushDevice!
   "Turn notifications off on this device."
   deletePushSubscription(deviceId: ID!): PushDevice!
+  "Save when I last opened Activity (ms); returns the stored time. Only moves forward, capped at the server's now. No subscription listens to it, so the partner never sees it."
+  markActivitySeen(at: Float!): Float!
+  "Add a Comment. The client picks id, so a retry with the same id writes nothing twice."
+  addComment(itemId: ID!, id: ID!, text: String!): CommentChange!
+  "Post a Note on the Fridge. The id comes from the client, so a replay returns the stored Note."
+  postNote(id: ID!, text: String!, pinned: Boolean, expiresAt: Float): Note!
+  pinNote(id: ID!, pinned: Boolean!): Note!
+  "Set the Note's expiry, or clear it with null."
+  setNoteExpiry(id: ID!, expiresAt: Float): Note!
+  "Mark the Note as turned into this Task (m2/03). The first Task wins; later calls return the Note as is."
+  markNoteTasked(id: ID!, taskId: ID!): Note!
 }
 
 type Subscription {
   onItemChange: ItemChange @aws_subscribe(mutations: ["putItem", "completeItem", "undoCompletion"])
   onTagChange: Tag @aws_subscribe(mutations: ["putTag", "deleteTag"])
   onProfileChange: Profile @aws_subscribe(mutations: ["putProfile"])
+  onCommentChange: CommentChange @aws_subscribe(mutations: ["addComment"])
+  onNoteChange: Note @aws_subscribe(mutations: ["postNote", "pinNote", "setNoteExpiry", "markNoteTasked"])
 }
