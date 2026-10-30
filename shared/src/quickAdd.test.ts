@@ -21,6 +21,11 @@ const ok = (line: string) => {
   return r.item;
 };
 
+const rec = (line: string) => {
+  const item = ok(line);
+  return item.kind === "chore" ? item.recurrence : undefined;
+};
+
 describe("quick-add shorthand", () => {
   it("reads the story's example", () => {
     expect(ok("bath every 3d #baby @aubyn")).toEqual({
@@ -37,14 +42,14 @@ describe("quick-add shorthand", () => {
     ["every day", { every: 1, unit: "days" }],
     ["daily", { every: 1, unit: "days" }],
     ["weekly", { every: 1, unit: "weeks" }],
-  ] as const)("reads the Interval %s", (phrase, rec) => {
-    expect(ok(`water plants ${phrase}`).recurrence).toEqual({ type: "interval", ...rec });
+  ] as const)("reads the Interval %s", (phrase, interval) => {
+    expect(rec(`water plants ${phrase}`)).toEqual({ type: "interval", ...interval });
   });
 
   it("reads a weekday Calendar schedule, with a time", () => {
-    expect(ok("trash every tue at 8pm").recurrence).toEqual({ type: "calendar", freq: "weekly", byWeekday: [2], at: "20:00" });
-    expect(ok("bins every mon,thu at 07:30").recurrence).toEqual({ type: "calendar", freq: "weekly", byWeekday: [1, 4], at: "07:30" });
-    expect(ok("recycling every fri").recurrence).toEqual({ type: "calendar", freq: "weekly", byWeekday: [5] });
+    expect(rec("trash every tue at 8pm")).toEqual({ type: "calendar", freq: "weekly", byWeekday: [2], at: "20:00" });
+    expect(rec("bins every mon,thu at 07:30")).toEqual({ type: "calendar", freq: "weekly", byWeekday: [1, 4], at: "07:30" });
+    expect(rec("recycling every fri")).toEqual({ type: "calendar", freq: "weekly", byWeekday: [5] });
   });
 
   it("is a plain Task without a Recurrence", () => {

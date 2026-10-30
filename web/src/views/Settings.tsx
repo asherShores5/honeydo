@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { readAlertPrefs, type AlertPrefs, type Severity } from "@aubi/shared";
-import { listPasskeys, registerPasskey, signOut } from "../auth";
+import { deletePasskey, listPasskeys, registerPasskey, signOut } from "../auth";
+import { passkeyRows, type PasskeyRow } from "../passkeys";
+import { when } from "../format";
 import { removeTag, saveProfile, saveTag, toast, useStore } from "../store";
 import { groupTags, tagId } from "../tags";
 import { releaseThisDevice } from "../notifications";
@@ -14,12 +16,22 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const tags = useStore((s) => s.tags);
   const [name, setName] = useState(me.displayName ?? "");
   const [prefs, setPrefs] = useState(() => readAlertPrefs(me.alertPrefs));
-  const [passkeys, setPasskeys] = useState<number>();
+  const [passkeys, setPasskeys] = useState<PasskeyRow[]>();
   const [newTag, setNewTag] = useState({ name: "", group: "Category" });
 
-  useEffect(() => {
-    listPasskeys().then((p) => setPasskeys(p.length), () => {});
-  }, []);
+  const loadPasskeys = () => listPasskeys().then((p) => setPasskeys(passkeyRows(p, location.hostname)), () => {});
+  useEffect(() => void loadPasskeys(), []);
+
+  async function removePasskey(p: PasskeyRow) {
+    if (!p.removable || !confirm(`Remove "${p.name}" from ${when(p.createdAt)}? It won't sign in anymore.`)) return;
+    try {
+      await deletePasskey(p.id);
+      toast("Passkey removed");
+    } catch (e) {
+      toast((e as Error).message);
+    }
+    void loadPasskeys();
+  }
 
   async function patch(p: Parameters<typeof saveProfile>[0]) {
     try {
@@ -124,8 +136,20 @@ export function Settings({ onClose }: { onClose: () => void }) {
         </form>
 
         <h3>Sign-in</h3>
-        <p>{passkeys === undefined ? "…" : `${passkeys} passkey${passkeys === 1 ? "" : "s"} registered.`}</p>
-        <button onClick={() => registerPasskey().then(() => (toast("Passkey added"), setPasskeys((passkeys ?? 0) + 1)), (e) => toast(e.message))}>
+        {passkeys === undefined ? <p>…</p> : (
+          <ul className="passkeys">
+            {passkeys.length === 0 && <li className="empty">No passkeys yet.</li>}
+            {passkeys.map((p) => (
+              <li key={p.id}>
+                <span>{p.name}<small> · added {when(p.createdAt)}{p.oldDomain ? " · old domain, can't sign in here" : ""}</small></span>
+                {p.removable
+                  ? <button className="link danger" onClick={() => void removePasskey(p)}>Remove</button>
+                  : <small title="Keep at least one passkey that works here">Last one</small>}
+              </li>
+            ))}
+          </ul>
+        )}
+        <button onClick={() => registerPasskey().then(() => (toast("Passkey added"), void loadPasskeys()), (e) => toast(e.message))}>
           Add a passkey for this device
         </button>
         {/* Push cleanup first, while the tokens still work (story 25). */}
