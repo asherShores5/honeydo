@@ -88,3 +88,13 @@ describe("bad JSON in AWSJSON fields", () => {
     await expect(h.call(h.A, "saveViews", { defaultView: "{oops" })).rejects.toThrow(/^ValidationError/);
   });
 });
+
+describe("completeItem time", () => {
+  it("rejects a Completion time that isn't a real moment", async () => {
+    const h2 = harness();
+    await h2.call(h2.A, "putItem", { input: { id: "nanchore", kind: "chore", title: "x", tags: [], visibility: "shared", archived: false, recurrence: JSON.stringify({ type: "interval", every: 1, unit: "days" }) } });
+    for (const at of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      await expect(h2.call(h2.A, "completeItem", { itemId: "nanchore", at })).rejects.toThrow(/ValidationError/);
+    }
+  });
+});

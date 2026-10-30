@@ -371,6 +371,7 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   const item = await getItemFor(ctx, args.itemId);
   const now = Date.now();
   // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
+  if (args.at != null && !(Number.isFinite(args.at) && args.at >= 0)) throw new UserError("ValidationError", "bad Completion time");
   const at = Math.min(Math.round(args.at ?? now), now + CLOCK_SLACK_MS);
   if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
   const note = args.note || undefined;
