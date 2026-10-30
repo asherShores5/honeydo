@@ -364,10 +364,13 @@ export function response(ctx) {
     // ---- cost guardrail ----
     new budgets.CfnBudget(this, "Budget", {
       budget: {
-        budgetName: "aubi-honey-monthly",
+        // Light daily use by two costs cents; $1 catches a runaway. The tag filter needs the `app`
+        // cost allocation tag active in Billing (activated 2026-10-30). The account-wide
+        // account-global-monthly budget ($20) lives outside this stack.
+        budgetName: "honeydo-monthly",
         budgetType: "COST",
         timeUnit: "MONTHLY",
-        budgetLimit: { amount: 5, unit: "USD" },
+        budgetLimit: { amount: 1, unit: "USD" },
         costFilters: { TagKeyValue: ["user:app$aubi-honey"] },
       },
       notificationsWithSubscribers: [
