@@ -46,6 +46,16 @@ export async function launch() {
   async function open(username: string, opts: OpenOptions = {}) {
     const context = await browser.newContext({ ...devices["iPhone 13"], serviceWorkers: "block", timezoneId: "America/Los_Angeles" });
     const page = await context.newPage();
+    // Offline: the browser's own flag (navigator.onLine, events) plus our routes failing like no signal.
+    let offline = false;
+    const sockets = new Set<{ close: () => Promise<void> }>();
+    Object.assign(page, {
+      setOffline: async (on: boolean) => {
+        offline = on;
+        await context.setOffline(on);
+        if (on) for (const ws of sockets) await ws.close().catch(() => {});
+      },
+    });
     page.on("pageerror", (e) => console.log(`[${username}] pageerror: ${e.message}`));
     page.on("console", (m) => { if (m.type() === "error") console.log(`[${username}] console: ${m.text()}`); });
     if (opts.now !== undefined) await page.clock.install({ time: opts.now });
@@ -69,16 +79,20 @@ export async function launch() {
       return route.fulfill({ body: readFileSync(file), contentType: TYPES[path.extname(file)] ?? "application/octet-stream" });
     });
     await context.route("https://cognito-idp.us-west-1.amazonaws.com/", async (route) => {
+      if (offline) return route.abort("internetdisconnected");
       const target = (route.request().headers()["x-amz-target"] ?? "").split(".").pop()!;
       const r = cognito(target, route.request().postDataJSON());
       return route.fulfill({ status: r.status, contentType: "application/x-amz-json-1.1", body: JSON.stringify(r.json) });
     });
     await context.route(GRAPHQL_URL, async (route) => {
+      if (offline) return route.abort("internetdisconnected");
       const { query, variables } = route.request().postDataJSON();
       const json = await graphql(route.request().headers()["authorization"], query, variables);
       return route.fulfill({ json });
     });
     await context.routeWebSocket(/appsync-realtime-api/, (ws) => {
+      if (offline) return void ws.close();
+      sockets.add(ws);
       const header = JSON.parse(atob(new URL(ws.url()).searchParams.get("header") ?? "e30="));
       const member = memberForToken(header.Authorization);
       const unsubs = new Map<string, () => void>();
@@ -96,12 +110,12 @@ export async function launch() {
           unsubs.get(msg.id)?.();
         }
       });
-      ws.onClose(() => unsubs.forEach((u) => u()));
+      ws.onClose(() => (unsubs.forEach((u) => u()), sockets.delete(ws)));
     });
 
     await page.goto(ORIGIN + "/");
     pages.push(page);
-    return page;
+    return page as Page & { setOffline: (on: boolean) => Promise<void> };
   }
 
   return { browser, open, close: () => browser.close() };
