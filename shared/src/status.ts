@@ -10,6 +10,15 @@ export function intervalMs(rec: IntervalRec): number {
   return rec.every * UNIT_MS[rec.unit];
 }
 
+/**
+ * The longest Warn window a Chore may override to: its Interval, or a Calendar schedule's cadence
+ * (a week, or 28 days for monthly). Longer would mean "always yellow".
+ */
+export function warnWindowMax(rec: Recurrence): number {
+  if (rec.type === "interval") return intervalMs(rec);
+  return rec.freq === "weekly" ? 7 * DAY : 28 * DAY;
+}
+
 /** SPEC §4.2: max(1 day, 10% of interval), capped at 50% of interval for short chores. */
 export function defaultWarnWindow(intervalMs: number): number {
   return Math.min(Math.max(DAY, intervalMs * 0.1), intervalMs * 0.5);

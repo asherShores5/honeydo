@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DAY, HOUR, fromWall, toWall } from "./time";
-import { defaultWarnWindow, schedule, status } from "./status";
+import { defaultWarnWindow, schedule, status, warnWindowMax } from "./status";
 import { DEFAULT_ALERT_PREFS, alertRecipients, dingSlotsForDay, shouldDing } from "./alerts";
 import type { Chore, Item, Task } from "./types";
 
@@ -129,5 +129,21 @@ describe("overdue dings", () => {
     expect(alertRecipients(red, ["a", "b"])).toEqual(["a", "b"]);
     expect(alertRecipients({ ...red, assigneeId: "b" }, ["a", "b"])).toEqual(["b"]);
     expect(alertRecipients({ ...red, visibility: "private:a" }, ["a", "b"])).toEqual(["a"]);
+  });
+});
+
+describe("Warn window override (m6/04)", () => {
+  it("turns a Chore yellow earlier than the default", () => {
+    // Every 3 days, due T0 + 2 days: default Warn window is 1 day, so green now.
+    const c = chore({ lastDoneAt: T0 - DAY });
+    expect(status(c, T0)).toBe("green");
+    expect(status({ ...c, warnWindow: 2 * DAY + HOUR }, T0)).toBe("yellow");
+  });
+
+  it("caps an override at the Chore's cadence", () => {
+    expect(warnWindowMax({ type: "interval", every: 3, unit: "days" })).toBe(3 * DAY);
+    expect(warnWindowMax({ type: "interval", every: 2, unit: "weeks" })).toBe(14 * DAY);
+    expect(warnWindowMax({ type: "calendar", freq: "weekly", byWeekday: [2] })).toBe(7 * DAY);
+    expect(warnWindowMax({ type: "calendar", freq: "monthly", byMonthDay: [1] })).toBe(28 * DAY);
   });
 });
