@@ -126,9 +126,12 @@ export class AppStack extends Stack {
       authFlows: { user: true },
       generateSecret: false,
       preventUserExistenceErrors: true,
+      // No hosted UI or OAuth redirects: the app talks to Cognito's JSON API directly.
+      disableOAuth: true,
       accessTokenValidity: Duration.hours(1),
       idTokenValidity: Duration.hours(1),
-      refreshTokenValidity: Duration.days(30),
+      // A stolen phone or token is good for a week at most; a passkey tap signs back in.
+      refreshTokenValidity: Duration.days(7),
     });
 
     // ---- API ----
@@ -148,7 +151,8 @@ export class AppStack extends Stack {
       authorizationConfig: {
         defaultAuthorization: { authorizationType: appsync.AuthorizationType.USER_POOL, userPoolConfig: { userPool } },
       },
-      logConfig: { fieldLogLevel: appsync.FieldLogLevel.ERROR, retention: logs.RetentionDays.TWO_WEEKS },
+      // Errors only, and without request/response content (titles, notes, private items).
+      logConfig: { fieldLogLevel: appsync.FieldLogLevel.ERROR, excludeVerboseContent: true, retention: logs.RetentionDays.TWO_WEEKS },
     });
     const ds = api.addLambdaDataSource("ApiDs", fn);
     for (const field of ["me", "snapshot", "completions"]) ds.createResolver(`Q${field}`, { typeName: "Query", fieldName: field });
@@ -165,15 +169,20 @@ export class AppStack extends Stack {
     const none = api.addNoneDataSource("None");
     // Notes and Comments fan out only to Members who can see the envelope's visibility. Mirrored
     // by visibilityDeliveredTo() in api/src/testing/harness.ts; keep the two in step.
-    const VISIBILITY_FILTER = appsync.Code.fromInline(`
+    // Every subscription first checks the caller is one of the two Members (the Lambda's
+    // ALLOWED_USERNAMES check never runs for subscriptions), then applies its filter, if any.
+    const subscriptionCode = (filter?: string) => appsync.Code.fromInline(`
 import { util, extensions } from "@aws-appsync/utils";
-export function request() { return { payload: null }; }
+const MEMBERS = ${JSON.stringify(USERNAMES)};
+export function request(ctx) {
+  if (!MEMBERS.includes(ctx.identity?.username)) util.unauthorized();
+  return { payload: null };
+}
 export function response(ctx) {
-  extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter({
-    visibility: { in: ["shared", "private:" + ctx.identity.sub] },
-  }));
+  ${filter ? `extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter(${filter}));` : ""}
   return null;
 }`);
+    const VISIBILITY_FILTER = subscriptionCode(`{ visibility: { in: ["shared", "private:" + ctx.identity.sub] } }`);
 
     // ---- Comments (M2) ----
     ds.createResolver("Qcomments", { typeName: "Query", fieldName: "comments" });
@@ -191,19 +200,17 @@ export function response(ctx) {
       typeName: "Subscription",
       fieldName: "onItemChange",
       runtime: appsync.FunctionRuntime.JS_1_0_0,
-      code: appsync.Code.fromInline(`
-import { util, extensions } from "@aws-appsync/utils";
-export function request() { return { payload: null }; }
-export function response(ctx) {
-  extensions.setSubscriptionFilter(util.transform.toSubscriptionFilter({
+      code: subscriptionCode(`{
     or: [
       { visibility: { in: ["shared", "private:" + ctx.identity.sub] } },
       { removedFor: { contains: ctx.identity.sub } },
     ],
-  }));
-  return null;
-}`),
+  }`),
     });
+    // Tags and Profiles fan out to both Members unfiltered; these resolvers only add the Member check.
+    for (const [id, fieldName] of [["SubTags", "onTagChange"], ["SubProfiles", "onProfileChange"]]) {
+      none.createResolver(id, { typeName: "Subscription", fieldName, runtime: appsync.FunctionRuntime.JS_1_0_0, code: subscriptionCode() });
+    }
 
     // ---- Fridge Notes (m2/02) ----
     for (const field of ["postNote", "pinNote", "setNoteExpiry"]) {
@@ -311,12 +318,20 @@ export function response(ctx) {
             `connect-src 'self' https://*.appsync-api.${region}.amazonaws.com wss://*.appsync-realtime-api.${region}.amazonaws.com https://cognito-idp.${region}.amazonaws.com`,
             "frame-ancestors 'none'",
             "base-uri 'self'",
+            "form-action 'self'",
+            "object-src 'none'",
           ].join("; "),
         },
         strictTransportSecurity: { override: true, accessControlMaxAge: Duration.days(365), includeSubdomains: false },
         contentTypeOptions: { override: true },
         frameOptions: { override: true, frameOption: cloudfront.HeadersFrameOption.DENY },
         referrerPolicy: { override: true, referrerPolicy: cloudfront.HeadersReferrerPolicy.SAME_ORIGIN },
+      },
+      customHeadersBehavior: {
+        customHeaders: [
+          // Nothing here uses these; passkeys (publickey-credentials-*) keep their 'self' default.
+          { header: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()", override: true },
+        ],
       },
     });
     const distribution = new cloudfront.Distribution(this, "Cdn", {
@@ -396,10 +411,13 @@ export const GITHUB_REPO = "asherShores5/honeydo";
 /** Immutable owner/repo IDs; GitHub's OIDC `sub` now embeds them (owner@id/repo@id). */
 const GITHUB_REPO_WITH_IDS = "asherShores5@71547146/honeydo@1427388015";
 export const DEPLOY_BRANCH = "prod";
+/** GitHub Environment the deploy job runs in: prod branch only, needs Asher's approval. */
+export const DEPLOY_ENVIRONMENT = "production";
 
 /**
  * GitHub Actions → AWS via OIDC (no stored keys). The role can only assume the CDK bootstrap
- * roles, and only workflows running on the prod branch of this repo can assume it.
+ * roles, and only jobs in this repo's `production` Environment can assume it. That Environment
+ * is limited to the prod branch and has a required reviewer (set in GitHub, not here).
  */
 export class CiStack extends Stack {
   constructor(scope: Construct, id: string, props: StackProps) {
@@ -415,7 +433,7 @@ export class CiStack extends Stack {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           "token.actions.githubusercontent.com:sub": [GITHUB_REPO_WITH_IDS, GITHUB_REPO].map(
-            (r) => `repo:${r}:ref:refs/heads/${DEPLOY_BRANCH}`,
+            (r) => `repo:${r}:environment:${DEPLOY_ENVIRONMENT}`,
           ),
         },
       }),

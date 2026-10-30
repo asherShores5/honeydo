@@ -148,6 +148,8 @@ export async function freshTokens(): Promise<Tokens> {
 
 export async function signOut() {
   const t = tokens;
+  // Device-wide flags that would mislead the next Member on a shared device.
+  localStorage.removeItem("aubi.hasPasskey");
   save(null);
   if (t) await cognito("RevokeToken", { Token: t.refreshToken, ClientId: getConfig().clientId }).catch(() => {});
 }
