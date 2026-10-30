@@ -79,6 +79,10 @@ async function countPrefix(prefix: string) {
   return n;
 }
 
+async function recordExists(sk: string) {
+  return (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: sk } }))).Item !== undefined;
+}
+
 /** Record caps against a scripted flood, generous enough that normal use never meets them. */
 const LIMITS = { pushDevices: 10, items: 2000, notes: 300, commentsPerItem: 500 } as const;
 
@@ -327,6 +331,10 @@ async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: num
   const existing = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
   if (existing && !canSee(existing.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
   checkVisibilityChange(existing, fields.visibility, ctx.userId);
+  // Archived Items count too: there is no delete, so the cap bounds the table.
+  if (!existing && (await countPrefix("ITEM#")) >= LIMITS.items) {
+    throw new UserError("ValidationError", `the household already has ${LIMITS.items} items, the most allowed`);
+  }
   if (existing && args.expectedVersion != null && existing.version !== args.expectedVersion) {
     throw new UserError("ConflictError", `item is at version ${existing.version}`);
   }
@@ -543,17 +551,17 @@ async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
  */
 async function putPushSubscription(ctx: Ctx, args: PushSubscriptionInput) {
   const sub = validatePushSubscription(args);
-  const key = { PK, SK: pushKey(ctx.userId, sub.deviceId) };
-  // Re-registering a device always works; a new one only under the cap.
-  const known = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
-  if (!known && (await countPrefix(pushKey(ctx.userId, ""))) >= LIMITS.pushDevices) {
+  const sk = pushKey(ctx.userId, sub.deviceId);
+  // Re-registering a device always works; a new one only under the cap. Dead endpoints are pruned
+  // by the Notifier (404/410), so a lost phone frees its slot after its next failed push.
+  if (!(await recordExists(sk)) && (await countPrefix(pushKey(ctx.userId, ""))) >= LIMITS.pushDevices) {
     throw new UserError("ValidationError", `at most ${LIMITS.pushDevices} devices can get notifications`);
   }
   const now = Date.now();
   await ddb.send(
     new PutCommand({
       TableName: TABLE,
-      Item: { PK, SK: pushKey(ctx.userId, sub.deviceId), userId: ctx.userId, ...sub, createdAt: now },
+      Item: { PK, SK: sk, userId: ctx.userId, ...sub, createdAt: now },
     }),
   );
   return { deviceId: sub.deviceId, enabled: true };
@@ -631,6 +639,10 @@ async function fridge(ctx: Ctx) {
 
 async function postNote(ctx: Ctx, args: NoteInput) {
   const fields = validateNoteInput(args);
+  // Expired Notes count until TTL removes them. A replay of a stored Note goes through as before.
+  if ((await countPrefix("NOTE#")) >= LIMITS.notes && !(await recordExists(noteKey(fields.id)))) {
+    throw new UserError("ValidationError", `the Fridge already has ${LIMITS.notes} Notes, the most allowed`);
+  }
   const now = Date.now();
   const rec = {
     PK, SK: noteKey(fields.id), ...fields, by: ctx.userId, at: now, visibility: "shared", updatedAt: now,
@@ -768,6 +780,10 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
   const { itemId, id, text } = validateCommentInput(args);
   const item = await getItemFor(ctx, itemId);
   const key = { PK, SK: commentKey(itemId, id) };
+  // A replay of a stored Comment goes through as before, so the replay path below answers it.
+  if ((await countPrefix(commentKey(itemId, ""))) >= LIMITS.commentsPerItem && !(await recordExists(key.SK))) {
+    throw new UserError("ValidationError", `this item already has ${LIMITS.commentsPerItem} Comments, the most allowed`);
+  }
   const rec = { ...key, id, itemId, at: Date.now(), by: ctx.userId, text, visibility: item.visibility };
   const written = await ddb
     .send(
