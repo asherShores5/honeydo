@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { VIEW_NAME_MAX, status, unreadActivity, urgency, type Item, type SavedView } from "@aubi/shared";
+import { VIEW_NAME_MAX, sortItems, status, unreadActivity, type Item, type SavedView, type ViewSort } from "@aubi/shared";
 import { completeItem, markActivitySeen, nameOf, saveViews as saveMyViews, toast, undoCompletion, useStore, type Tag, type Who } from "../store";
 import { ago, newId } from "../format";
 import { chipLabel, groupTags, matchesTags } from "../tags";
@@ -42,6 +42,9 @@ function matches(item: Item, selected: Set<string>, tags: Record<string, Tag>, w
   return true;
 }
 
+/** The quick sort buttons on On track and Overdue. Due date is the default. */
+const SORTS: [ViewSort, string][] = [["urgency", "Due date"], ["priority", "Priority"], ["title", "A–Z"]];
+
 export function Home() {
   const me = useStore((s) => s.me!);
   const items = useStore((s) => s.items);
@@ -56,6 +59,7 @@ export function Home() {
   const [tab, setTab] = useState<Tab>("ontrack");
   const [selected, setSelected] = useState(new Set<string>(me.defaultView?.tags ?? []));
   const [who, setWho] = useState<Who>(me.defaultView?.who ?? "anyone");
+  const [sort, setSort] = useState<ViewSort>(me.defaultView?.sort ?? "urgency");
   const [showFilters, setShowFilters] = useState(false);
   const [editing, setEditing] = useState<Item | "new" | null>(null);
   const [settings, setSettings] = useState(false);
@@ -77,7 +81,7 @@ export function Home() {
   function saveCurrentAsView() {
     const name = window.prompt("Name this view")?.trim();
     if (!name) return;
-    const view: SavedView = { id: newId(), name: name.slice(0, VIEW_NAME_MAX), tags: [...selected], who, sort: "urgency", layout: "list", pinned: true };
+    const view: SavedView = { id: newId(), name: name.slice(0, VIEW_NAME_MAX), tags: [...selected], who, sort, layout: "list", pinned: true };
     saveViews([...savedViews, view]);
     setTab(`view:${view.id}`);
   }
@@ -103,13 +107,13 @@ export function Home() {
     }
   }, [pendingItem, items, me.userId]);
 
-  // Remember the current filter as this profile's default view.
+  // Remember the current filter and sort as this profile's default view.
   const first = useRef(true);
   useEffect(() => {
     if (first.current) return void (first.current = false);
-    const t = setTimeout(() => void saveMyViews({ defaultView: { id: "default", name: "Default", tags: [...selected], who } }).catch(() => {}), 1200);
+    const t = setTimeout(() => void saveMyViews({ defaultView: { id: "default", name: "Default", tags: [...selected], who, sort } }).catch(() => {}), 1200);
     return () => clearTimeout(t);
-  }, [selected, who]);
+  }, [selected, who, sort]);
 
   // Unread marker on Activity: looking at the tab marks everything in it seen.
   const unread = unreadActivity(feed, me.userId, me.activitySeenAt);
@@ -126,13 +130,13 @@ export function Home() {
   const groups = useMemo(() => groupTags(tags), [tags]);
 
   const visible = useMemo(() => {
-    const list = Object.values(items).filter((i) => !i.archived && status(i, now) !== "done" && matches(i, selected, tags, who, me.userId));
-    list.sort((a, b) => urgency(a, now) - urgency(b, now));
+    const active = Object.values(items).filter((i) => !i.archived && status(i, now) !== "done" && matches(i, selected, tags, who, me.userId));
+    const list = sortItems(active, sort, now);
     return {
       overdue: list.filter((i) => status(i, now) === "red"),
       ontrack: list.filter((i) => status(i, now) !== "red"),
     };
-  }, [items, selected, tags, who, me.userId, now]);
+  }, [items, selected, tags, who, sort, me.userId, now]);
 
   // Done Archives a Task; this tab is how you get back to it and its History.
   const finished = useMemo(() => finishedTasks(Object.values(items)), [items]);
@@ -185,6 +189,11 @@ export function Home() {
           <button className={`chip ${filterCount ? "on" : ""}`} onClick={() => setShowFilters(!showFilters)}>
             Filter{filterCount ? ` · ${filterCount}` : ""} {showFilters ? "▴" : "▾"}
           </button>
+          <span className="sort" role="group" aria-label="Sort">
+            {SORTS.map(([s, label]) => (
+              <button key={s} className={`chip ${sort === s ? "on" : ""}`} aria-pressed={sort === s} onClick={() => setSort(s)}>{label}</button>
+            ))}
+          </span>
           {[...selected].map((id) => tags[id] && (
             <button key={id} className="chip on" onClick={() => toggle(id)}>{chipLabel(tags[id], tags)} ✕</button>
           ))}

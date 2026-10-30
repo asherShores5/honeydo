@@ -24,7 +24,7 @@ export const TIME_OF_DAY = "Time of day";
 
 export const WHO = ["anyone", "mine", "partner", "unassigned"] as const;
 export type Who = (typeof WHO)[number];
-export const VIEW_SORTS = ["urgency", "title", "lastDone"] as const;
+export const VIEW_SORTS = ["urgency", "priority", "title", "lastDone"] as const;
 export type ViewSort = (typeof VIEW_SORTS)[number];
 export const VIEW_LAYOUTS = ["list", "today", "board", "calendar"] as const;
 export type ViewLayout = (typeof VIEW_LAYOUTS)[number];
@@ -223,10 +223,19 @@ export function historyStats(items: Item[], completions: Completion[], members: 
   return { byMember, chores };
 }
 
-/** A Saved view's order: most urgent first, by title, or longest since last Done (never done first). */
+const PRIORITY: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const priority = (i: Item) => PRIORITY[i.severity ?? "low"];
+
+/**
+ * A list's order: soonest due first ("urgency": overdue, then due soonest, undated last), by
+ * Severity (high, medium, then low or unset; ties soonest due), by title, or longest since last
+ * Done (never done first).
+ */
 export function sortItems(items: Item[], sort: ViewSort, now: number): Item[] {
+  const byDue = (a: Item, b: Item) => urgency(a, now) - urgency(b, now);
   const key: Record<ViewSort, (a: Item, b: Item) => number> = {
-    urgency: (a, b) => urgency(a, now) - urgency(b, now),
+    urgency: byDue,
+    priority: (a, b) => priority(a) - priority(b) || byDue(a, b),
     title: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
     lastDone: (a, b) => (a.lastDoneAt ?? Number.NEGATIVE_INFINITY) - (b.lastDoneAt ?? Number.NEGATIVE_INFINITY),
   };

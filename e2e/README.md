@@ -13,6 +13,7 @@ Not a workspace, so CI never installs it.
     npx tsx m6.ts              # M6 Polish checks
     npx tsx flows.ts           # privacy, Tasks, Comments, Fridge, Activity, offline, Views, Settings
     npx tsx calendar.ts        # Calendar layout, phone + desktop
+    npx tsx sort.ts            # Home quick sort, Tag board, Warn window hint, desktop sheet header
     npx tsx tour.ts            # screenshots of every screen: phone, desktop, dark
     npx tsx sheet.ts phone 6 260   # one contact sheet per mode, to review by eye
 

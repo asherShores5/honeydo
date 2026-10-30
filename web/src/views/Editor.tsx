@@ -5,7 +5,7 @@ import { ago, fromLocalInput, newId, span, toLocalInput, when } from "../format"
 import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
 import type { TaskDraft } from "../noteToTask";
-import { warnFromInput, warnToInput, type WarnUnit } from "../warnWindow";
+import { warnFromInput, warnPlaceholder, warnToInput, type WarnUnit } from "../warnWindow";
 import { snoozeChoices } from "../rowActions";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
@@ -165,11 +165,12 @@ export function Editor({ item, prefill, onSaved, onClose }: {
           <label>Due <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
         )}
         {mode !== "once" && (() => {
-          const fallback = span(defaultWarnWindowFor(recurrence(mode)));
+          const defaultMs = defaultWarnWindowFor(recurrence(mode));
+          const fallback = span(defaultMs);
           return (
           <div className="row">
             Turn yellow
-            <input type="number" min={1} className="num" value={warn.value} placeholder={fallback}
+            <input type="number" min={1} className="num" value={warn.value} placeholder={warnPlaceholder(defaultMs, warn.unit)}
               onChange={(e) => setWarn({ ...warn, value: e.target.value })} aria-label="Warn window" />
             <select value={warn.unit} onChange={(e) => setWarn({ ...warn, unit: e.target.value as WarnUnit })}>
               <option value="hours">hours</option><option value="days">days</option>
