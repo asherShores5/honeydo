@@ -12,6 +12,13 @@ export function span(ms: number): string {
   return `${Math.round(a / (7 * DAY))}w`;
 }
 
+/** A row's due text. Within a minute either way reads "due now", so a just-created Chore (due at creation) doesn't say "due in 1m". */
+export function dueLabel(nextDue: number | null, now: number): string {
+  if (nextDue === null) return "no due date";
+  if (Math.abs(nextDue - now) < 60_000) return "due now";
+  return nextDue > now ? `due in ${span(nextDue - now)}` : `overdue ${span(now - nextDue)}`;
+}
+
 export const ago = (t: number, now = Date.now()) => `${span(now - t)} ago`;
 
 const dt = new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });

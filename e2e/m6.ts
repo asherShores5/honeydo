@@ -33,7 +33,9 @@ await check("quick-add: 'Mop floor every 3d #kitchen @aubyn' creates a Chore", a
   if (c.input.kind !== "chore" || r?.every !== 3 || r?.unit !== "days") throw new Error(`kind=${c.input.kind} rec=${JSON.stringify(r)}`);
   if (!c.input.tags.includes("loc-kitchen")) throw new Error(`tags=${c.input.tags}`);
   if (c.input.assigneeId !== "sub-aubyn") throw new Error(`assignee=${c.input.assigneeId}`);
-  return `kind=chore every 3 days, tags=${c.input.tags}, assignee=aubyn`;
+  const meta = await row(asher, "Mop floor").locator(".meta").innerText();
+  if (!meta.startsWith("due now")) throw new Error(`new Chore reads "${meta}", expected "due now"`);
+  return `kind=chore every 3 days, tags=${c.input.tags}, assignee=aubyn, row: ${meta}`;
 });
 await check("live: aubyn's phone shows Mop floor without reload", async () => {
   await row(aubyn, "Mop floor").waitFor({ timeout: 4000 });

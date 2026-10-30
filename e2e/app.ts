@@ -34,6 +34,8 @@ const TYPES: Record<string, string> = {
 export interface OpenOptions {
   /** Start signed out (to test the sign-in screen). */
   signedOut?: boolean;
+  /** Screen: an iPhone 13 (default) or a 1280×800 desktop browser. */
+  device?: "phone" | "desktop";
   /** Fixed clock for the page (ms since epoch). */
   now?: number;
 }
@@ -44,7 +46,8 @@ export async function launch() {
   const pages: Page[] = [];
 
   async function open(username: string, opts: OpenOptions = {}) {
-    const context = await browser.newContext({ ...devices["iPhone 13"], serviceWorkers: "block", timezoneId: "America/Los_Angeles" });
+    const screen = opts.device === "desktop" ? { viewport: { width: 1280, height: 800 } } : devices["iPhone 13"];
+    const context = await browser.newContext({ ...screen, serviceWorkers: "block", timezoneId: "America/Los_Angeles" });
     const page = await context.newPage();
     // Offline: the browser's own flag (navigator.onLine, events) plus our routes failing like no signal.
     let offline = false;
