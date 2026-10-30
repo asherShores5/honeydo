@@ -15,6 +15,7 @@ import type { Note } from "@aubi/shared";
 import { markNoteTasked } from "../store";
 import { linksNote, taskDraft } from "../noteToTask";
 import { ItemRow, LABEL } from "./ItemRow";
+import { QuickAdd } from "./QuickAdd";
 import { BUILTIN_VIEWS, BoardView, CalendarView, SavedViewBody, SavedViewsManager, StatsView, TodayView, type BuiltinView } from "./Views";
 
 /** `view:<id>` is a pinned Saved view (m5/05). */
@@ -207,6 +208,8 @@ export function Home() {
           )}
         </div>
       )}
+
+      {tab === "ontrack" && <QuickAdd />}
 
       <main>
         {activeView ? (
