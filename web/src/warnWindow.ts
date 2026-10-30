@@ -15,3 +15,9 @@ export function warnFromInput(value: string, unit: WarnUnit, rec: Recurrence): {
   const error = warnWindowProblem(ms, rec);
   return error ? { ok: false, error } : { ok: true, ms };
 }
+
+/** The empty field's hint: the default Warn window as a number in `unit` ("1" day, not "1d"). */
+export function warnPlaceholder(defaultMs: number, unit: WarnUnit): string {
+  return String(Math.round((defaultMs / UNIT_MS[unit]) * 10) / 10);
+}
+

@@ -193,3 +193,17 @@ describe("Saved view sort", () => {
     expect(sortItems(items, sort, now).map((i) => i.id)).toEqual(expected);
   });
 });
+
+describe("Priority sort", () => {
+  it("puts high, then medium, then low or unset; ties go to the soonest due", () => {
+    const items = [
+      chore("low-soon", 0, { title: "a", severity: "low", lastDoneAt: now - 2 * DAY }),
+      chore("high-later", 0, { title: "b", severity: "high", lastDoneAt: now - DAY }),
+      chore("none-overdue", 0, { title: "c", lastDoneAt: now - 5 * DAY }),
+      chore("high-overdue", 0, { title: "d", severity: "high", lastDoneAt: now - 5 * DAY }),
+      chore("medium", 0, { title: "e", severity: "medium", lastDoneAt: now - DAY }),
+    ];
+    expect(sortItems(items, "priority", now).map((i) => i.id)).toEqual(["high-overdue", "high-later", "medium", "none-overdue", "low-soon"]);
+  });
+});
+

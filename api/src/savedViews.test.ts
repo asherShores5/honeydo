@@ -64,6 +64,14 @@ describe("Saved views", () => {
     expect((await h.call(h.A, "me")).savedViews).toBeNull();
   });
 
+  it("keeps Home's quick sort (Due date, Priority, A–Z) on the default view", async () => {
+    for (const sort of ["urgency", "priority", "title"]) {
+      await h.call(h.A, "saveViews", { defaultView: { id: "default", name: "Default", tags: [], who: "anyone", sort } });
+      expect((await h.call(h.A, "me")).defaultView.sort).toBe(sort);
+    }
+    await expect(h.call(h.A, "saveViews", { defaultView: { id: "default", name: "Default", tags: [], who: "anyone", sort: "random" } })).rejects.toThrow(/ValidationError/);
+  });
+
   it("validates the default view the same way", async () => {
     await expect(h.call(h.A, "saveViews", { defaultView: view({ who: "nobody" }) })).rejects.toThrow(/ValidationError/);
     await h.call(h.A, "saveViews", { defaultView: { id: "default", name: "Default", tags: [], who: "mine" } });

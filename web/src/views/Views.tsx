@@ -2,10 +2,10 @@
 // pure derivation from @aubi/shared over the snapshot (plus Completions where it needs them).
 import { useEffect, useMemo, useState } from "react";
 import {
-  DAY, TIME_OF_DAY, calendarDays, endOfDay, fromWall, historyStats, isActive, sortItems, tagBoard, toWall, todayGroups,
+  TIME_OF_DAY, calendarDays, endOfDay, fromWall, historyStats, isActive, sortItems, tagBoard, toWall, todayGroups,
   type Completion, type Item, type SavedView, type TagColumn, type ViewLayout,
 } from "@aubi/shared";
-import { loadCompletionsOf, nameOf, snooze, useStore, type Tag } from "../store";
+import { loadCompletionsOf, nameOf, useStore, type Tag } from "../store";
 import { span, when } from "../format";
 import { groupTags } from "../tags";
 import { ItemRow } from "./ItemRow";
@@ -33,8 +33,8 @@ function useCompletions(itemIds: string[], since: number): Completion[] | null {
   return list;
 }
 
-function Columns({ columns, now, tags, actions, snoozable, untaggedLabel }: {
-  columns: TagColumn[]; now: number; tags: Record<string, Tag>; actions: Actions; snoozable?: boolean;
+function Columns({ columns, now, tags, actions, untaggedLabel }: {
+  columns: TagColumn[]; now: number; tags: Record<string, Tag>; actions: Actions;
   /** Heading of the column for items with no Tag in the group. */
   untaggedLabel: string;
 }) {
@@ -46,8 +46,7 @@ function Columns({ columns, now, tags, actions, snoozable, untaggedLabel }: {
           <ul className="items">
             {c.items.length === 0 && <li className="empty">Nothing here.</li>}
             {c.items.map((i) => (
-              <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => actions.onOpen(i)} onDone={() => actions.onDone(i)} onActions={() => actions.onActions(i)}
-                onSnooze={snoozable ? () => snooze(i.id, Date.now() + DAY) : undefined} />
+              <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => actions.onOpen(i)} onDone={() => actions.onDone(i)} onActions={() => actions.onActions(i)} />
             ))}
           </ul>
         </section>
@@ -78,7 +77,7 @@ export function BoardView({ items, now, actions, group }: { items: Item[]; now: 
       </div>
       {!current ? <p className="empty">Add some Tags first.</p> : (
         <div className="columns">
-          <Columns columns={columns} now={now} tags={tags} actions={actions} snoozable untaggedLabel={`No ${current.toLowerCase()}`} />
+          <Columns columns={columns} now={now} tags={tags} actions={actions} untaggedLabel={`No ${current.toLowerCase()}`} />
         </div>
       )}
     </div>
@@ -208,7 +207,7 @@ export function SavedViewsManager({ views, onChange }: { views: SavedView[]; onC
           </select>
           {(v.layout ?? "list") === "list" && (
             <select value={v.sort ?? "urgency"} onChange={(e) => edit(v.id, { sort: e.target.value as SavedView["sort"] })} aria-label={`${v.name} sort`}>
-              <option value="urgency">Most urgent</option><option value="title">A–Z</option><option value="lastDone">Longest since done</option>
+              <option value="urgency">Due date</option><option value="priority">Priority</option><option value="title">A–Z</option><option value="lastDone">Longest since done</option>
             </select>
           )}
           {v.layout === "board" && (
