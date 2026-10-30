@@ -1,5 +1,5 @@
 {
-  "name": "aubi-honey",
+  "name": "honeydo",
   "private": true,
   "workspaces": ["shared", "api", "infra", "web"],
   "scripts": {
