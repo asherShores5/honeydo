@@ -32,8 +32,37 @@ function intIn(n: unknown, lo: number, hi: number): boolean {
   return Number.isInteger(n) && (n as number) >= lo && (n as number) <= hi;
 }
 
+/** JSON.parse that fails as a ValidationError the client can show, not an InternalError. */
+function parseJson(s: string, what: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    throw new UserError("ValidationError", `${what} is not valid JSON`);
+  }
+}
+
+/** Furthest ahead a due or snooze time may be: 20 years. */
+const MAX_AHEAD_MS = 20 * 365.25 * 24 * 3600 * 1000;
+
+/** An epoch-ms time from 0 to now + 20 years, or null/absent for none. */
+function validateTime(v: unknown, what: string, now: number): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > now + MAX_AHEAD_MS) {
+    throw new UserError("ValidationError", `bad ${what}`);
+  }
+  return v;
+}
+
+/** A Tag's optional style: color "#rrggbb" (or empty), order a whole number 0-10000. */
+export function validateTagStyle(color: unknown, order: unknown) {
+  if (color != null && color !== "" && (typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color))) {
+    throw new UserError("ValidationError", "tag color must look like #a1b2c3");
+  }
+  if (order != null && !intIn(order, 0, 10_000)) throw new UserError("ValidationError", "tag order must be a whole number 0-10000");
+}
+
 export function parseRecurrence(raw: unknown): Recurrence {
-  const r = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+  const r = (typeof raw === "string" ? parseJson(raw, "recurrence") : raw) as Record<string, unknown>;
   if (r?.type === "interval") {
     if (!["hours", "days", "weeks"].includes(r.unit as string)) throw new UserError("ValidationError", "bad interval unit");
     if (!intIn(r.every, 1, 1000)) throw new UserError("ValidationError", "interval must be 1-1000");
@@ -63,7 +92,7 @@ function validateWarnWindow(v: unknown, rec: Recurrence | undefined): number | u
 }
 
 /** Validates client input and returns the user-editable fields of an Item. */
-export function validateItemInput(input: ItemInput, userId: string, users: string[]) {
+export function validateItemInput(input: ItemInput, userId: string, users: string[], now = Date.now()) {
   if (!ID_RE.test(input.id)) throw new UserError("ValidationError", "bad id");
   if (input.kind !== "chore" && input.kind !== "task") throw new UserError("ValidationError", "bad kind");
   const title = input.title.trim();
@@ -79,12 +108,14 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     throw new UserError("ValidationError", "a private item can only be assigned to you");
   }
   if (input.severity && !["low", "medium", "high"].includes(input.severity)) throw new UserError("ValidationError", "bad severity");
+  const dueAt = validateTime(input.dueAt, "due date", now);
+  const snoozedUntil = validateTime(input.snoozedUntil, "snooze time", now);
   let byKind: Pick<Chore, "kind" | "recurrence" | "dueAt"> | Pick<Task, "kind" | "recurrence" | "dueAt">;
   if (input.kind === "chore") {
     if (!input.recurrence) throw new UserError("ValidationError", "chores need a recurrence");
     byKind = { kind: "chore", recurrence: parseRecurrence(input.recurrence) };
   } else {
-    byKind = { kind: "task", recurrence: undefined, dueAt: input.dueAt ?? undefined };
+    byKind = { kind: "task", recurrence: undefined, dueAt };
   }
 
   const fields = {
@@ -97,13 +128,23 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     visibility: input.visibility as Item["visibility"],
     severity: (input.severity || undefined) as Item["severity"],
     warnWindow: validateWarnWindow(input.warnWindow, byKind.kind === "chore" ? byKind.recurrence : undefined),
-    snoozedUntil: input.snoozedUntil ?? undefined,
+    snoozedUntil,
     archived: input.archived,
   };
   return fields;
 }
 
-const PROFILE_KEYS = ["displayName", "color", "theme", "density", "alertPrefs", "setupComplete"] as const;
+/**
+ * Only an Item's creator may move it from shared to Private; otherwise the partner could make
+ * someone else's Item vanish from their phone. New Items and edits that keep the Visibility pass.
+ */
+export function checkVisibilityChange(existing: { visibility?: unknown; createdBy?: unknown } | undefined, visibility: string, userId: string) {
+  if (existing?.visibility === "shared" && visibility !== "shared" && existing.createdBy !== userId) {
+    throw new UserError("Forbidden", "only the Member who created an item can make it private");
+  }
+}
+
+const PROFILE_KEYS =["displayName", "color", "theme", "density", "alertPrefs", "setupComplete"] as const;
 /** Own-only Profile fields with their own mutation (saveViews), since putProfile fans out to the partner. */
 const VIEW_KEYS = ["defaultView", "savedViews"] as const;
 
@@ -111,7 +152,7 @@ const VIEW_KEYS = ["defaultView", "savedViews"] as const;
 function parseJsonField(k: string, v: unknown): unknown {
   const s = typeof v === "string" ? v : JSON.stringify(v);
   if (s.length > 20_000) throw new UserError("ValidationError", `${k} too large`);
-  return JSON.parse(s);
+  return parseJson(s, k);
 }
 
 export function validateProfileInput(input: Record<string, unknown>) {
@@ -225,17 +266,32 @@ export function validateDeviceId(deviceId: unknown): string {
   return deviceId;
 }
 
-/** A browser PushSubscription as sent by the Enable step. The Notifier POSTs to `endpoint`, so it must be https. */
+/** The browsers' push services: Chrome/Android, Firefox, Safari/iOS, Edge on Windows. */
+const PUSH_HOSTS = ["fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com"];
+const PUSH_HOST_SUFFIXES = [".push.apple.com", ".notify.windows.com"];
+
+/**
+ * The Notifier POSTs to the endpoint, so it must be a known push service over https on 443, or
+ * anyone signed in could aim the Lambda at any host (SSRF). URL lowercases the host and drops
+ * ":443"; IP literals and trailing-dot hosts never match the list.
+ */
+function isPushServiceUrl(url: URL | undefined): boolean {
+  if (!url || url.protocol !== "https:" || url.port !== "" || url.username || url.password) return false;
+  const host = url.hostname;
+  return PUSH_HOSTS.includes(host) || PUSH_HOST_SUFFIXES.some((s) => host.endsWith(s) && host.length > s.length);
+}
+
+/** A browser PushSubscription as sent by the Enable step. */
 export function validatePushSubscription(input: PushSubscriptionInput): PushSubscriptionInput {
   const deviceId = validateDeviceId(input.deviceId);
   const { endpoint, p256dh, auth } = input;
   let url: URL | undefined;
   try {
-    url = new URL(endpoint);
+    url = typeof endpoint === "string" ? new URL(endpoint) : undefined;
   } catch {
     // falls through to the check below
   }
-  if (url?.protocol !== "https:" || endpoint.length > 2048) throw new UserError("ValidationError", "bad push endpoint");
+  if (!isPushServiceUrl(url) || endpoint.length > 2048) throw new UserError("ValidationError", "bad push endpoint");
   for (const [k, max] of [[p256dh, 200], [auth, 100]] as const) {
     if (typeof k !== "string" || !B64URL_RE.test(k) || k.length > max) throw new UserError("ValidationError", "bad push key");
   }

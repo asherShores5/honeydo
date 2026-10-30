@@ -46,6 +46,21 @@ describe("done since the last Handoff", () => {
     const c = forA([task("t1", "Call the vet", { archived: true, lastDoneAt: now - HOUR })], [done("t1", B, now - HOUR)]);
     expect(c.done.map((d) => d.title)).toEqual(["Call the vet"]);
   });
+
+  it("leaves out Completions stamped Private to the partner, even on an Item now shared", () => {
+    const items = [chore("bath", "Baby bath")];
+    const c = forA(items, [
+      { ...done("bath", B, now - 3 * HOUR), visibility: `private:${B}` },
+      { ...done("bath", B, now - 2 * HOUR), visibility: "shared" },
+      done("bath", B, now - HOUR), // written before stamping: shared
+    ]);
+    expect(c.done.map((d) => d.at)).toEqual([now - 2 * HOUR, now - HOUR]);
+  });
+
+  it("keeps the recipient's own Private-stamped Completions", () => {
+    const c = forA([chore("bath", "Baby bath")], [{ ...done("bath", A, now - HOUR), visibility: `private:${A}` }]);
+    expect(c.done.map((d) => d.at)).toEqual([now - HOUR]);
+  });
 });
 
 describe("summary lines", () => {

@@ -54,6 +54,11 @@ export interface Completion {
   at: number;
   by: UserId;
   note?: string;
+  /**
+   * The Item's Visibility when this was logged (SPEC §4.5). One logged while Private stays with
+   * its Member even after the Item is shared. Absent on rows from before the stamp: shared.
+   */
+  visibility?: "shared" | `private:${UserId}`;
 }
 
 export interface AlertPrefs {

@@ -219,7 +219,10 @@ export function Editor({ item, prefill, onSaved, onClose }: {
           <small>Dings per day while overdue.</small>
         </label>
 
-        <label className="check"><input type="checkbox" checked={isPrivate} onChange={(e) => togglePrivate(e.target.checked)} /> Private (only you can see it)</label>
+        {/* Only the creator may make a shared item Private (the server enforces it too). */}
+        {(!item || isPrivate || item.createdBy === me.userId) && (
+          <label className="check"><input type="checkbox" checked={isPrivate} onChange={(e) => togglePrivate(e.target.checked)} /> Private (only you can see it)</label>
+        )}
         <label>Notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={5000} /></label>
 
         {item && live && (
