@@ -15,6 +15,8 @@ import type { Note } from "@aubi/shared";
 import { markNoteTasked } from "../store";
 import { linksNote, taskDraft } from "../noteToTask";
 import { ItemRow, LABEL } from "./ItemRow";
+import { QuickAdd } from "./QuickAdd";
+import { RowActions } from "./RowActions";
 import { BUILTIN_VIEWS, BoardView, CalendarView, SavedViewBody, SavedViewsManager, StatsView, TodayView, type BuiltinView } from "./Views";
 
 /** `view:<id>` is a pinned Saved view (m5/05). */
@@ -59,6 +61,7 @@ export function Home() {
   const [settings, setSettings] = useState(false);
   const [undo, setUndo] = useState<{ itemId: string; at: number; title: string } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
+  const [rowActions, setRowActions] = useState<Item | null>(null);
   const [builtin, setBuiltin] = useState<BuiltinView>("today");
   const savedViews = me.savedViews ?? [];
   const pinned = savedViews.filter((v) => v.pinned);
@@ -140,14 +143,14 @@ export function Home() {
     setSelected(s);
   }
 
-  function done(item: Item) {
-    const at = Date.now();
+  /** Done now, or backdated from "Done at…" (m6/03); the server keeps last done if `at` is older. */
+  function done(item: Item, at = Date.now()) {
     completeItem(item.id, at);
     setUndo({ itemId: item.id, at, title: item.title });
   }
 
   const filterCount = selected.size + (who === "anyone" ? 0 : 1);
-  const actions = { onOpen: (i: Item) => setEditing(i), onDone: done };
+  const actions = { onOpen: (i: Item) => setEditing(i), onDone: (i: Item) => done(i), onActions: setRowActions };
 
   return (
     <div className="app" data-density={me.density ?? "cards"}>
@@ -208,6 +211,8 @@ export function Home() {
         </div>
       )}
 
+      {tab === "ontrack" && <QuickAdd />}
+
       <main>
         {activeView ? (
           <SavedViewBody view={activeView} items={Object.values(items)} now={now} actions={actions} filter={viewFilter} />
@@ -257,7 +262,7 @@ export function Home() {
               <li className="empty">{tab === "overdue" ? "Nothing overdue 🎉" : filterCount ? "No matches for this filter." : "No chores yet. Tap + to add one."}</li>
             )}
             {visible[tab === "overdue" ? "overdue" : "ontrack"].map((i) => (
-              <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => setEditing(i)} onDone={() => done(i)} />
+              <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => setEditing(i)} onDone={() => done(i)} onActions={() => setRowActions(i)} />
             ))}
           </ul>
         )}
@@ -281,6 +286,7 @@ export function Home() {
           onClose={() => setOpened(null)}
         />
       )}
+      {rowActions && <RowActions item={rowActions} onDone={(at) => done(rowActions, at)} onClose={() => setRowActions(null)} />}
       {editing && <Editor item={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
       {fromNote && (
         <Editor

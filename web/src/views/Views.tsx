@@ -16,6 +16,8 @@ export const BUILTIN_VIEWS: [BuiltinView, string][] = [["today", "Today"], ["cal
 interface Actions {
   onOpen: (item: Item) => void;
   onDone: (item: Item) => void;
+  /** Snooze choices and "Done at…" (swipe left or ⋯). */
+  onActions: (item: Item) => void;
 }
 
 /** Every Completion of these items since `since`, reloaded when the set or `since` changes. */
@@ -44,7 +46,7 @@ function Columns({ columns, now, tags, actions, snoozable, untaggedLabel }: {
           <ul className="items">
             {c.items.length === 0 && <li className="empty">Nothing here.</li>}
             {c.items.map((i) => (
-              <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => actions.onOpen(i)} onDone={() => actions.onDone(i)}
+              <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => actions.onOpen(i)} onDone={() => actions.onDone(i)} onActions={() => actions.onActions(i)}
                 onSnooze={snoozable ? () => snooze(i.id, Date.now() + DAY) : undefined} />
             ))}
           </ul>
@@ -177,7 +179,7 @@ export function SavedViewBody({ view, items, now, actions, filter }: {
   return (
     <ul className="items">
       {list.length === 0 && <li className="empty">No matches for this view.</li>}
-      {list.map((i) => <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => actions.onOpen(i)} onDone={() => actions.onDone(i)} />)}
+      {list.map((i) => <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => actions.onOpen(i)} onDone={() => actions.onDone(i)} onActions={() => actions.onActions(i)} />)}
     </ul>
   );
 }

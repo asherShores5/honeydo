@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DAY, HOUR, fromWall, toWall } from "./time";
-import { defaultWarnWindow, schedule, status } from "./status";
+import { defaultWarnWindow, defaultWarnWindowFor, schedule, status, warnWindowMax, warnWindowProblem } from "./status";
 import { DEFAULT_ALERT_PREFS, alertRecipients, dingSlotsForDay, shouldDing } from "./alerts";
 import type { Chore, Item, Task } from "./types";
 
@@ -129,5 +129,43 @@ describe("overdue dings", () => {
     expect(alertRecipients(red, ["a", "b"])).toEqual(["a", "b"]);
     expect(alertRecipients({ ...red, assigneeId: "b" }, ["a", "b"])).toEqual(["b"]);
     expect(alertRecipients({ ...red, visibility: "private:a" }, ["a", "b"])).toEqual(["a"]);
+  });
+});
+
+describe("Warn window override (m6/04)", () => {
+  it("turns a Chore yellow earlier than the default", () => {
+    // Every 3 days, due T0 + 2 days: default Warn window is 1 day, so green now.
+    const c = chore({ lastDoneAt: T0 - DAY });
+    expect(status(c, T0)).toBe("green");
+    expect(status({ ...c, warnWindow: 2 * DAY + HOUR }, T0)).toBe("yellow");
+  });
+
+  it("caps an override at the Chore's cadence", () => {
+    expect(warnWindowMax({ type: "interval", every: 3, unit: "days" })).toBe(3 * DAY);
+    expect(warnWindowMax({ type: "interval", every: 2, unit: "weeks" })).toBe(14 * DAY);
+    expect(warnWindowMax({ type: "calendar", freq: "weekly", byWeekday: [2] })).toBe(7 * DAY);
+    expect(warnWindowMax({ type: "calendar", freq: "monthly", byMonthDay: [1] })).toBe(28 * DAY);
+  });
+
+  it("caps a several-day schedule at its shortest gap, so it can't be always yellow", () => {
+    expect(warnWindowMax({ type: "calendar", freq: "weekly", byWeekday: [1, 4] })).toBe(3 * DAY); // Mon→Thu
+    expect(warnWindowMax({ type: "calendar", freq: "weekly", byWeekday: [0, 6] })).toBe(DAY); // Sat→Sun
+    expect(warnWindowMax({ type: "calendar", freq: "monthly", byMonthDay: [1, 15] })).toBe(14 * DAY);
+    expect(warnWindowMax({ type: "calendar", freq: "monthly", byMonthDay: [2, 27] })).toBe(3 * DAY); // 27th → 2nd of a 28-day month
+  });
+
+  it("checks an override the same way for the Editor and the server", () => {
+    const every3d = { type: "interval", every: 3, unit: "days" } as const;
+    expect(warnWindowProblem(2 * DAY, every3d)).toBeNull();
+    expect(warnWindowProblem(0, every3d)).toMatch(/more than 0/);
+    expect(warnWindowProblem(4 * DAY, every3d)).toMatch(/gap between due dates/);
+    expect(warnWindowProblem(400 * DAY, undefined)).toMatch(/gap between due dates|a year/);
+    expect(warnWindowProblem(30 * DAY, undefined)).toBeNull(); // a Task's due date
+  });
+
+  it("knows each Recurrence's default Warn window", () => {
+    expect(defaultWarnWindowFor({ type: "interval", every: 3, unit: "days" })).toBe(DAY);
+    expect(defaultWarnWindowFor({ type: "interval", every: 30, unit: "days" })).toBe(3 * DAY);
+    expect(defaultWarnWindowFor({ type: "calendar", freq: "weekly", byWeekday: [2] })).toBe(DAY);
   });
 });

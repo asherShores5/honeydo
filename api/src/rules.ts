@@ -1,5 +1,5 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import { COMMENT_MAX, NOTE_MAX, SAVED_VIEWS_MAX, SLOTS_PER_SEVERITY, VIEW_LAYOUTS, VIEW_NAME_MAX, VIEW_SORTS, VIEW_TAGS_MAX, WHO, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
+import { COMMENT_MAX, NOTE_MAX, SAVED_VIEWS_MAX, SLOTS_PER_SEVERITY, VIEW_LAYOUTS, VIEW_NAME_MAX, VIEW_SORTS, VIEW_TAGS_MAX, WHO, warnWindowProblem, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
 
 export { canSee } from "@aubi/shared";
 
@@ -54,6 +54,14 @@ export function parseRecurrence(raw: unknown): Recurrence {
   throw new UserError("ValidationError", "unknown recurrence");
 }
 
+/** m6/04: an override is a positive ms span within the Chore's shortest gap; empty = the default. */
+function validateWarnWindow(v: unknown, rec: Recurrence | undefined): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  const problem = typeof v === "number" ? warnWindowProblem(v, rec) : "The Warn window must be a number.";
+  if (problem) throw new UserError("ValidationError", problem);
+  return v as number;
+}
+
 /** Validates client input and returns the user-editable fields of an Item. */
 export function validateItemInput(input: ItemInput, userId: string, users: string[]) {
   if (!ID_RE.test(input.id)) throw new UserError("ValidationError", "bad id");
@@ -88,7 +96,7 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     assigneeId: input.assigneeId || undefined,
     visibility: input.visibility as Item["visibility"],
     severity: (input.severity || undefined) as Item["severity"],
-    warnWindow: input.warnWindow ?? undefined,
+    warnWindow: validateWarnWindow(input.warnWindow, byKind.kind === "chore" ? byKind.recurrence : undefined),
     snoozedUntil: input.snoozedUntil ?? undefined,
     archived: input.archived,
   };

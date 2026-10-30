@@ -1,5 +1,6 @@
 // Cognito user-pool auth via the public JSON API (no SDK): password once, then passkeys.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import type { CognitoPasskey } from "./passkeys";
 import { getConfig } from "./config";
 
 interface Tokens {
@@ -108,9 +109,14 @@ export async function registerPasskey() {
   localStorage.setItem("aubi.hasPasskey", "1");
 }
 
-export async function listPasskeys(): Promise<{ CredentialId: string; FriendlyCredentialName?: string; CreatedAt: number }[]> {
+export async function listPasskeys(): Promise<CognitoPasskey[]> {
   const r = await cognito("ListWebAuthnCredentials", { AccessToken: (await freshTokens()).accessToken });
   return r.Credentials ?? [];
+}
+
+/** Remove one of my passkeys (m6/05); it stops working for sign-in at once. */
+export async function deletePasskey(credentialId: string) {
+  await cognito("DeleteWebAuthnCredential", { AccessToken: (await freshTokens()).accessToken, CredentialId: credentialId });
 }
 
 let refreshing: Promise<Tokens> | null = null;
