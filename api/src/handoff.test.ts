@@ -119,6 +119,22 @@ describe("Handoff push", () => {
     expect(toB.payload.body).toBe("Done: Baby bath (you), Buy Asher's gift (you)");
   });
 
+  it("a Completion logged while the Item was Private stays out of the partner's Handoff after it is shared", async () => {
+    const every3Days = JSON.stringify({ type: "interval", every: 3, unit: "days" });
+    const gift = chore("gift", "Wrap the gift", { recurrence: every3Days, visibility: `private:${h.B.userId}` });
+    await h.call(h.B, "putItem", { input: gift });
+    vi.setSystemTime(T0 + HOUR);
+    await h.call(h.B, "completeItem", { itemId: "gift" });
+    await h.call(h.B, "putItem", { input: { ...gift, visibility: "shared" } });
+
+    await runNotifier(EIGHT_PM);
+
+    const toA = handoffs().find((s) => s.endpoint === endpoint("member-a"))!;
+    expect(toA.payload.body).not.toContain("Done");
+    const toB = handoffs().find((s) => s.endpoint === endpoint("member-b"))!;
+    expect(toB.payload.body).toContain("Done: Wrap the gift (you)");
+  });
+
   it("sends with a 12-hour TTL and a topic, so a backlog collapses to the latest", async () => {
     await runNotifier(EIGHT_PM);
     expect(handoffs()[0].opts).toMatchObject({ TTL: 12 * 3600, urgency: "normal", topic: "handoff" });

@@ -280,7 +280,7 @@ export async function flush() {
             continue;
           }
         }
-        toast(`Couldn't save: ${e.message.replace(/^\w+Error: /, "")}`);
+        toast(`Couldn't save: ${e.message.replace(/^(\w+Error|Forbidden): /, "")}`);
         await refresh();
       }
       set({ outbox: state.outbox.filter((o) => o.id !== op.id), online: true });

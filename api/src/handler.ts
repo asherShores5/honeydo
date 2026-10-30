@@ -11,8 +11,8 @@ import {
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
 import { CLOCK_SLACK_MS, fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
-  UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
-  validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
+  UserError, canSee, checkVisibilityChange, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
+  validateCommentInput, validateId, validateNoteExpiry, validateNoteInput, validateTagStyle,
   type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
 import { PK, commentKey, handoffKey, ifConditionFailed, noteKey, pushKey } from "./table";
@@ -58,6 +58,33 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
   } while (ExclusiveStartKey);
   return out;
 }
+
+/** How many records start with `prefix`. Select COUNT returns no items, so this reads keys only. */
+async function countPrefix(prefix: string) {
+  let n = 0;
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :p)",
+        ExpressionAttributeValues: { ":pk": PK, ":p": prefix },
+        Select: "COUNT",
+        ExclusiveStartKey,
+      }),
+    );
+    n += r.Count ?? 0;
+    ExclusiveStartKey = r.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+  return n;
+}
+
+async function recordExists(sk: string) {
+  return (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: sk } }))).Item !== undefined;
+}
+
+/** Record caps against a scripted flood, generous enough that normal use never meets them. */
+const LIMITS = { pushDevices: 10, items: 2000, notes: 300, commentsPerItem: 500 } as const;
 
 const ACTIVITY_SIZE = 100;
 
@@ -259,10 +286,9 @@ const COMPLETIONS_SINCE_MAX = 5000;
  */
 async function completions(ctx: Ctx, args: { itemId: string; limit?: number; since?: number | null }) {
   await getItemFor(ctx, args.itemId);
-  if (args.since == null) {
-    const recs = await queryPrefix(`DONE#${args.itemId}#`, { limit: Math.min(args.limit ?? 50, 500), newestFirst: true });
-    return recs.map((r) => strip(r));
-  }
+  const max = args.since == null ? Math.min(args.limit ?? 50, 500) : COMPLETIONS_SINCE_MAX;
+  // Pages past Completions hidden from the caller (logged while the Item was the partner's
+  // Private), so a limit counts only the ones they can see.
   const out: Record<string, unknown>[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
@@ -272,17 +298,26 @@ async function completions(ctx: Ctx, args: { itemId: string; limit?: number; sin
         KeyConditionExpression: "PK = :pk AND SK BETWEEN :from AND :to",
         ExpressionAttributeValues: {
           ":pk": PK,
-          ":from": completionKey(args.itemId, Math.max(0, args.since)),
+          ":from": completionKey(args.itemId, Math.max(0, args.since ?? 0)),
           ":to": completionKey(args.itemId, 999_999_999_999_999), // the largest 15-digit key
         },
         ScanIndexForward: false,
+        Limit: args.since == null ? max : undefined,
         ExclusiveStartKey,
       }),
     );
-    out.push(...(r.Items ?? []));
+    out.push(...(r.Items ?? []).filter((c) => canSee(completionStamp(c), ctx.userId)));
     ExclusiveStartKey = r.LastEvaluatedKey;
-  } while (ExclusiveStartKey && out.length < COMPLETIONS_SINCE_MAX);
-  return out.slice(0, COMPLETIONS_SINCE_MAX).map((r) => strip(r));
+  } while (ExclusiveStartKey && out.length < max);
+  return out.slice(0, max).map(completionOut);
+}
+
+/** A Completion's stamp: its Item's Visibility when logged. Rows from before the stamp count as shared. */
+const completionStamp = (rec: Record<string, unknown>) => (rec.visibility as string | undefined) ?? "shared";
+
+function completionOut(rec: Record<string, unknown>) {
+  const { visibility: _v, ...rest } = strip<Record<string, unknown>>(rec);
+  return rest;
 }
 
 async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: number | null }) {
@@ -295,6 +330,11 @@ async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: num
   const key = { PK, SK: `ITEM#${fields.id}` };
   const existing = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
   if (existing && !canSee(existing.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
+  checkVisibilityChange(existing, fields.visibility, ctx.userId);
+  // Archived Items count too: there is no delete, so the cap bounds the table.
+  if (!existing && (await countPrefix("ITEM#")) >= LIMITS.items) {
+    throw new UserError("ValidationError", `the household already has ${LIMITS.items} items, the most allowed`);
+  }
   if (existing && args.expectedVersion != null && existing.version !== args.expectedVersion) {
     throw new UserError("ConflictError", `item is at version ${existing.version}`);
   }
@@ -331,6 +371,7 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   const item = await getItemFor(ctx, args.itemId);
   const now = Date.now();
   // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
+  if (args.at != null && !(Number.isFinite(args.at) && args.at >= 0)) throw new UserError("ValidationError", "bad Completion time");
   const at = Math.min(Math.round(args.at ?? now), now + CLOCK_SLACK_MS);
   if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
   const note = args.note || undefined;
@@ -344,7 +385,8 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
           {
             Put: {
               TableName: TABLE,
-              Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note },
+              // Stamped like a Comment: one logged while Private stays Private if the Item is shared later.
+              Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note, visibility: item.visibility },
               ConditionExpression: "attribute_not_exists(SK)",
             },
           },
@@ -373,7 +415,9 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
 async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
   const item = await getItemFor(ctx, args.itemId);
   // The delete and its "undone" entry go together, conditional on the Completion existing: undo
-  // of one that's already gone (outbox replay, or the partner undid it first) logs nothing.
+  // of one that's already gone (outbox replay, or the partner undid it first) logs nothing. One the
+  // caller can't see (logged while the Item was the partner's Private) is treated as already gone,
+  // so the partner can neither delete it nor learn it exists.
   await ddb
     .send(
       new TransactWriteCommand({
@@ -382,7 +426,10 @@ async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
             Delete: {
               TableName: TABLE,
               Key: { PK, SK: completionKey(args.itemId, args.at) },
-              ConditionExpression: "attribute_exists(SK)",
+              // AND binds tighter than OR; a stamped row exists by definition.
+              ConditionExpression:
+                "attribute_exists(SK) AND attribute_not_exists(visibility) OR visibility = :shared OR visibility = :mine",
+              ExpressionAttributeValues: { ":shared": "shared", ":mine": `private:${ctx.userId}` },
             },
           },
           { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", itemSubject(item)) } },
@@ -414,6 +461,7 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !name.trim() || name.length > 40 || !group.trim() || group.length > 40) {
     throw new UserError("ValidationError", "bad tag");
   }
+  validateTagStyle(color, order);
   const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
   // A Tag belongs to exactly one Tag group: an ID collision must not move it to another group.
   const written = await ddb
@@ -504,11 +552,17 @@ async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
  */
 async function putPushSubscription(ctx: Ctx, args: PushSubscriptionInput) {
   const sub = validatePushSubscription(args);
+  const sk = pushKey(ctx.userId, sub.deviceId);
+  // Re-registering a device always works; a new one only under the cap. Dead endpoints are pruned
+  // by the Notifier (404/410), so a lost phone frees its slot after its next failed push.
+  if (!(await recordExists(sk)) && (await countPrefix(pushKey(ctx.userId, ""))) >= LIMITS.pushDevices) {
+    throw new UserError("ValidationError", `at most ${LIMITS.pushDevices} devices can get notifications`);
+  }
   const now = Date.now();
   await ddb.send(
     new PutCommand({
       TableName: TABLE,
-      Item: { PK, SK: pushKey(ctx.userId, sub.deviceId), userId: ctx.userId, ...sub, createdAt: now },
+      Item: { PK, SK: sk, userId: ctx.userId, ...sub, createdAt: now },
     }),
   );
   return { deviceId: sub.deviceId, enabled: true };
@@ -586,6 +640,10 @@ async function fridge(ctx: Ctx) {
 
 async function postNote(ctx: Ctx, args: NoteInput) {
   const fields = validateNoteInput(args);
+  // Expired Notes count until TTL removes them. A replay of a stored Note goes through as before.
+  if ((await countPrefix("NOTE#")) >= LIMITS.notes && !(await recordExists(noteKey(fields.id)))) {
+    throw new UserError("ValidationError", `the Fridge already has ${LIMITS.notes} Notes, the most allowed`);
+  }
   const now = Date.now();
   const rec = {
     PK, SK: noteKey(fields.id), ...fields, by: ctx.userId, at: now, visibility: "shared", updatedAt: now,
@@ -723,6 +781,10 @@ async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: st
   const { itemId, id, text } = validateCommentInput(args);
   const item = await getItemFor(ctx, itemId);
   const key = { PK, SK: commentKey(itemId, id) };
+  // A replay of a stored Comment goes through as before, so the replay path below answers it.
+  if ((await countPrefix(commentKey(itemId, ""))) >= LIMITS.commentsPerItem && !(await recordExists(key.SK))) {
+    throw new UserError("ValidationError", `this item already has ${LIMITS.commentsPerItem} Comments, the most allowed`);
+  }
   const rec = { ...key, id, itemId, at: Date.now(), by: ctx.userId, text, visibility: item.visibility };
   const written = await ddb
     .send(

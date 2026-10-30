@@ -53,6 +53,17 @@ await check("Making a shared item Private removes it from aubyn's phone live (st
   return `visibility=${c.input.visibility}, assignee=${c.input.assigneeId ?? "none"}`;
 });
 
+await check("Partner's shared item: no Private checkbox (only the creator may make it Private)", async () => {
+  await open(aubyn, "Dishes");
+  const n = await editor(aubyn).getByRole("checkbox", { name: /Private/ }).count();
+  await editor(aubyn).getByRole("button", { name: "Cancel" }).click();
+  await open(asher, "Dishes");
+  const mine = await editor().getByRole("checkbox", { name: /Private/ }).count();
+  await editor().getByRole("button", { name: "Cancel" }).click();
+  if (n !== 0 || mine !== 1) throw new Error(`aubyn sees ${n}, asher sees ${mine}`);
+  return "hidden for aubyn, shown for asher (creator)";
+});
+
 // ---- Tasks (stories 2-4) ---------------------------------------------------
 await check("Task done leaves On track, shows in Finished, Undo brings it back", async () => {
   await reveal(asher, "Buy groceries");

@@ -97,6 +97,8 @@ export async function releaseThisDevice() {
   try {
     const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
     await (await reg?.pushManager.getSubscription())?.unsubscribe();
+    // Dings already on screen would show this Member's item titles to whoever signs in next.
+    for (const n of (await reg?.getNotifications()) ?? []) n.close();
   } catch {
     // nothing more to do: the record is gone or queued
   }

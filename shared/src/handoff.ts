@@ -55,6 +55,8 @@ export function buildHandoff({ userId, items, completions, names, since, until, 
   for (const c of completions) {
     const item = byId.get(c.itemId);
     if (!item || c.at <= since || c.at > now) continue;
+    // Logged while the Item was the partner's Private: still theirs alone, even if it's shared now.
+    if (!canSee(c.visibility ?? "shared", userId)) continue;
     done.push({ itemId: item.id, title: item.title, by: c.by, byName: c.by === userId ? "you" : names[c.by] ?? "someone", at: c.at });
   }
   done.sort((a, b) => a.at - b.at);
