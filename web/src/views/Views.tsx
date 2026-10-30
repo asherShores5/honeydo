@@ -102,7 +102,7 @@ export function CalendarView({ items, now, actions }: { items: Item[]; now: numb
         <button className="chip" onClick={() => setOffset(offset + 1)}>Later ▶</button>
       </div>
       {days.map((d) => (
-        <section key={d.start} className={`day ${d.start <= now && now < endOfDay(d.start) ? "today" : ""}`}>
+        <section key={d.start} className={`cal-day ${d.start <= now && now < endOfDay(d.start) ? "today" : ""}`}>
           <h3>{dayLabel.format(new Date(d.start))}</h3>
           <ul className="feed">
             {d.entries.length === 0 && <li className="empty">—</li>}

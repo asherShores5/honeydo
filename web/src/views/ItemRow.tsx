@@ -1,7 +1,7 @@
 import { useRef, useState, type PointerEvent } from "react";
 import { schedule, status, type Item, type Status } from "@aubi/shared";
 import { nameOf, type Tag } from "../store";
-import { ago, span } from "../format";
+import { ago, dueLabel, span } from "../format";
 import { chipLabel } from "../tags";
 import { swipeAction } from "../rowActions";
 
@@ -54,7 +54,7 @@ export function ItemRow({ item, now, tags, onOpen, onDone, onSnooze, onActions }
 
   const st = status(item, now);
   const { nextDue } = schedule(item);
-  const due = nextDue === null ? "no due date" : nextDue > now ? `due in ${span(nextDue - now)}` : `overdue ${span(now - nextDue)}`;
+  const due = dueLabel(nextDue, now);
   return (
     <li
       className={`item ${st}${dx ? " swiping" : ""}`}
