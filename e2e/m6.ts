@@ -1,53 +1,10 @@
 // M6 Polish browser checks. Run: npx tsx m6.ts  (after npm run build:web at the repo root)
-import type { Page } from "playwright";
 import { launch } from "./app";
-import { calls, db, seed, setPasskeys } from "./backend";
+import { calls, seed, setPasskeys } from "./backend";
+import { checklist, lastCall, localInput, row, shot as shotAt, swipe, reveal } from "./lib";
+const shot = (p: Parameters<typeof shotAt>[0], n: string) => shotAt(p, `m6-${n}`);
 
-const results: [string, boolean, string?][] = [];
-async function check(name: string, fn: () => Promise<string | void>) {
-  await closeSheets(failPage).catch(() => {});
-  try { results.push([name, true, (await fn()) ?? ""]); } catch (e) {
-    results.push([name, false, (e as Error).message.split("\n")[0]]);
-    await shot(failPage, `FAIL-${results.length}`).catch(() => {});
-  }
-}
-let failPage: Page;
-const shot = (p: Page, n: string) => p.screenshot({ path: `/tmp/e2e/m6-${n}.png` });
-const item = (id: string) => db.dump?.().find?.((r: any) => r.id === id);
-const lastCall = (field: string) => [...calls].reverse().find((c) => c.field === field);
-const row = (p: Page, title: string) => p.locator("li.item", { hasText: title }).first();
-/** Home lists one tab at a time: pick the tab that holds `title`. */
-async function reveal(p: Page, title: string) {
-  for (const tab of [/^On track/, /^Overdue/]) {
-    if (await row(p, title).isVisible()) return;
-    await p.getByRole("button", { name: tab }).first().click();
-    await p.waitForTimeout(200);
-  }
-}
-async function swipe(p: Page, title: string, dx: number) {
-  await reveal(p, title);
-  await row(p, title).scrollIntoViewIfNeeded();
-  const box = (await row(p, title).boundingBox())!;
-  const y = box.y + box.height / 2, x = box.x + box.width / 2;
-  await p.mouse.move(x, y); await p.mouse.down();
-  for (let i = 1; i <= 10; i++) await p.mouse.move(x + (dx * i) / 10, y + 1);
-  await p.mouse.up();
-}
-
-/** datetime-local value for `ms`, in the page's zone (Pacific), not this machine's. */
-function localInput(ms: number) {
-  const f = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  const v = Object.fromEntries(f.formatToParts(ms).map((x) => [x.type, x.value]));
-  return `${v.year}-${v.month}-${v.day}T${v.hour}:${v.minute}`;
-}
-/** Close whatever sheet a failed check left open. */
-async function closeSheets(p: Page) {
-  for (let i = 0; i < 3 && (await p.getByRole("dialog").count()); i++) {
-    const c = p.getByRole("dialog").last().getByRole("button", { name: "Cancel" });
-    if (await c.count()) await c.first().click(); else await p.keyboard.press("Escape");
-    await p.waitForTimeout(150);
-  }
-}
+const { check, watch, report } = checklist("m6");
 const now = Date.now();
 await seed(now);
 const nowSec = Math.floor(now / 1000);
@@ -58,7 +15,7 @@ setPasskeys("asher", [
 const app = await launch();
 const asher = await app.open("asher");
 const aubyn = await app.open("aubyn");
-failPage = asher;
+watch(asher);
 asher.on("dialog", (d) => d.accept());
 await asher.getByPlaceholder(/Quick add/).waitFor();
 await aubyn.getByPlaceholder(/Quick add/).waitFor();
@@ -208,5 +165,6 @@ await check("Settings: passkeys list shows both, remove the old one, last one ca
   return `before: ${before} → after: ${after}`;
 });
 
-for (const [n, ok, d] of results) console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `\n      ${d}` : ""}`);
+const failed = report();
 await app.close();
+process.exit(failed ? 1 : 0);

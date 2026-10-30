@@ -11,5 +11,8 @@ Not a workspace, so CI never installs it.
     cd e2e && npm install && npx playwright install chromium
     npx tsx smoke.ts           # seed + screenshot of Home
     npx tsx m6.ts              # M6 Polish checks
+    npx tsx flows.ts           # privacy, Tasks, Comments, Fridge, Activity, offline, Views, Settings
 
-Screenshots go to /tmp/e2e/. Not covered: real passkeys (WebAuthn), Web Push, iOS touch quirks.
+Screenshots go to /tmp/e2e/. Not covered: real passkeys (WebAuthn), Web Push, iOS touch quirks, offline launch (service
+workers are blocked so routes see every request). The dev desktop has no emoji font, so 💤 buttons
+show blank in screenshots.
