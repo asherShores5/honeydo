@@ -32,8 +32,37 @@ function intIn(n: unknown, lo: number, hi: number): boolean {
   return Number.isInteger(n) && (n as number) >= lo && (n as number) <= hi;
 }
 
+/** JSON.parse that fails as a ValidationError the client can show, not an InternalError. */
+function parseJson(s: string, what: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    throw new UserError("ValidationError", `${what} is not valid JSON`);
+  }
+}
+
+/** Furthest ahead a due or snooze time may be: 20 years. */
+const MAX_AHEAD_MS = 20 * 365.25 * 24 * 3600 * 1000;
+
+/** An epoch-ms time from 0 to now + 20 years, or null/absent for none. */
+function validateTime(v: unknown, what: string, now: number): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > now + MAX_AHEAD_MS) {
+    throw new UserError("ValidationError", `bad ${what}`);
+  }
+  return v;
+}
+
+/** A Tag's optional style: color "#rrggbb" (or empty), order a whole number 0-10000. */
+export function validateTagStyle(color: unknown, order: unknown) {
+  if (color != null && color !== "" && (typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color))) {
+    throw new UserError("ValidationError", "tag color must look like #a1b2c3");
+  }
+  if (order != null && !intIn(order, 0, 10_000)) throw new UserError("ValidationError", "tag order must be a whole number 0-10000");
+}
+
 export function parseRecurrence(raw: unknown): Recurrence {
-  const r = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+  const r = (typeof raw === "string" ? parseJson(raw, "recurrence") : raw) as Record<string, unknown>;
   if (r?.type === "interval") {
     if (!["hours", "days", "weeks"].includes(r.unit as string)) throw new UserError("ValidationError", "bad interval unit");
     if (!intIn(r.every, 1, 1000)) throw new UserError("ValidationError", "interval must be 1-1000");
@@ -63,7 +92,7 @@ function validateWarnWindow(v: unknown, rec: Recurrence | undefined): number | u
 }
 
 /** Validates client input and returns the user-editable fields of an Item. */
-export function validateItemInput(input: ItemInput, userId: string, users: string[]) {
+export function validateItemInput(input: ItemInput, userId: string, users: string[], now = Date.now()) {
   if (!ID_RE.test(input.id)) throw new UserError("ValidationError", "bad id");
   if (input.kind !== "chore" && input.kind !== "task") throw new UserError("ValidationError", "bad kind");
   const title = input.title.trim();
@@ -79,12 +108,14 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     throw new UserError("ValidationError", "a private item can only be assigned to you");
   }
   if (input.severity && !["low", "medium", "high"].includes(input.severity)) throw new UserError("ValidationError", "bad severity");
+  const dueAt = validateTime(input.dueAt, "due date", now);
+  const snoozedUntil = validateTime(input.snoozedUntil, "snooze time", now);
   let byKind: Pick<Chore, "kind" | "recurrence" | "dueAt"> | Pick<Task, "kind" | "recurrence" | "dueAt">;
   if (input.kind === "chore") {
     if (!input.recurrence) throw new UserError("ValidationError", "chores need a recurrence");
     byKind = { kind: "chore", recurrence: parseRecurrence(input.recurrence) };
   } else {
-    byKind = { kind: "task", recurrence: undefined, dueAt: input.dueAt ?? undefined };
+    byKind = { kind: "task", recurrence: undefined, dueAt };
   }
 
   const fields = {
@@ -97,7 +128,7 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
     visibility: input.visibility as Item["visibility"],
     severity: (input.severity || undefined) as Item["severity"],
     warnWindow: validateWarnWindow(input.warnWindow, byKind.kind === "chore" ? byKind.recurrence : undefined),
-    snoozedUntil: input.snoozedUntil ?? undefined,
+    snoozedUntil,
     archived: input.archived,
   };
   return fields;
@@ -121,7 +152,7 @@ const VIEW_KEYS = ["defaultView", "savedViews"] as const;
 function parseJsonField(k: string, v: unknown): unknown {
   const s = typeof v === "string" ? v : JSON.stringify(v);
   if (s.length > 20_000) throw new UserError("ValidationError", `${k} too large`);
-  return JSON.parse(s);
+  return parseJson(s, k);
 }
 
 export function validateProfileInput(input: Record<string, unknown>) {

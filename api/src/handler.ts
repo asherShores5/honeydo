@@ -12,7 +12,7 @@ import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
 import { CLOCK_SLACK_MS, fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
   UserError, canSee, checkVisibilityChange, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
-  validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
+  validateCommentInput, validateId, validateNoteExpiry, validateNoteInput, validateTagStyle,
   type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
 import { PK, commentKey, handoffKey, ifConditionFailed, noteKey, pushKey } from "./table";
@@ -452,6 +452,7 @@ async function putTag(_ctx: Ctx, args: { input: { id: string; name: string; grou
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !name.trim() || name.length > 40 || !group.trim() || group.length > 40) {
     throw new UserError("ValidationError", "bad tag");
   }
+  validateTagStyle(color, order);
   const rec = touch({ PK, SK: `TAG#${id}`, id, name: name.trim(), group: group.trim(), color, order, updatedAt: Date.now() });
   // A Tag belongs to exactly one Tag group: an ID collision must not move it to another group.
   const written = await ddb
