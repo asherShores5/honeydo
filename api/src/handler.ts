@@ -259,10 +259,9 @@ const COMPLETIONS_SINCE_MAX = 5000;
  */
 async function completions(ctx: Ctx, args: { itemId: string; limit?: number; since?: number | null }) {
   await getItemFor(ctx, args.itemId);
-  if (args.since == null) {
-    const recs = await queryPrefix(`DONE#${args.itemId}#`, { limit: Math.min(args.limit ?? 50, 500), newestFirst: true });
-    return recs.map((r) => strip(r));
-  }
+  const max = args.since == null ? Math.min(args.limit ?? 50, 500) : COMPLETIONS_SINCE_MAX;
+  // Pages past Completions hidden from the caller (logged while the Item was the partner's
+  // Private), so a limit counts only the ones they can see.
   const out: Record<string, unknown>[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
@@ -272,17 +271,26 @@ async function completions(ctx: Ctx, args: { itemId: string; limit?: number; sin
         KeyConditionExpression: "PK = :pk AND SK BETWEEN :from AND :to",
         ExpressionAttributeValues: {
           ":pk": PK,
-          ":from": completionKey(args.itemId, Math.max(0, args.since)),
+          ":from": completionKey(args.itemId, Math.max(0, args.since ?? 0)),
           ":to": completionKey(args.itemId, 999_999_999_999_999), // the largest 15-digit key
         },
         ScanIndexForward: false,
+        Limit: args.since == null ? max : undefined,
         ExclusiveStartKey,
       }),
     );
-    out.push(...(r.Items ?? []));
+    out.push(...(r.Items ?? []).filter((c) => canSee(completionStamp(c), ctx.userId)));
     ExclusiveStartKey = r.LastEvaluatedKey;
-  } while (ExclusiveStartKey && out.length < COMPLETIONS_SINCE_MAX);
-  return out.slice(0, COMPLETIONS_SINCE_MAX).map((r) => strip(r));
+  } while (ExclusiveStartKey && out.length < max);
+  return out.slice(0, max).map(completionOut);
+}
+
+/** A Completion's stamp: its Item's Visibility when logged. Rows from before the stamp count as shared. */
+const completionStamp = (rec: Record<string, unknown>) => (rec.visibility as string | undefined) ?? "shared";
+
+function completionOut(rec: Record<string, unknown>) {
+  const { visibility: _v, ...rest } = strip<Record<string, unknown>>(rec);
+  return rest;
 }
 
 async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: number | null }) {
@@ -344,7 +352,8 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
           {
             Put: {
               TableName: TABLE,
-              Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note },
+              // Stamped like a Comment: one logged while Private stays Private if the Item is shared later.
+              Item: { PK, SK: completionKey(args.itemId, at), itemId: args.itemId, at, by: ctx.userId, note, visibility: item.visibility },
               ConditionExpression: "attribute_not_exists(SK)",
             },
           },
@@ -373,7 +382,9 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
 async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
   const item = await getItemFor(ctx, args.itemId);
   // The delete and its "undone" entry go together, conditional on the Completion existing: undo
-  // of one that's already gone (outbox replay, or the partner undid it first) logs nothing.
+  // of one that's already gone (outbox replay, or the partner undid it first) logs nothing. One the
+  // caller can't see (logged while the Item was the partner's Private) is treated as already gone,
+  // so the partner can neither delete it nor learn it exists.
   await ddb
     .send(
       new TransactWriteCommand({
@@ -382,7 +393,10 @@ async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
             Delete: {
               TableName: TABLE,
               Key: { PK, SK: completionKey(args.itemId, args.at) },
-              ConditionExpression: "attribute_exists(SK)",
+              // AND binds tighter than OR; a stamped row exists by definition.
+              ConditionExpression:
+                "attribute_exists(SK) AND attribute_not_exists(visibility) OR visibility = :shared OR visibility = :mine",
+              ExpressionAttributeValues: { ":shared": "shared", ":mine": `private:${ctx.userId}` },
             },
           },
           { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", itemSubject(item)) } },
