@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DAY, HOUR } from "@aubi/shared";
-import { defaultWarnFor, warnFromInput, warnToInput } from "./warnWindow";
+import { warnFromInput, warnToInput } from "./warnWindow";
 
 const every3d = { type: "interval", every: 3, unit: "days" } as const;
 
@@ -20,8 +20,4 @@ describe("Warn window field (m6/04)", () => {
     expect(warnFromInput("-1", "hours", every3d).ok).toBe(false);
   });
 
-  it("knows the default it replaces", () => {
-    expect(defaultWarnFor(every3d, 0)).toBe(DAY); // max(1 day, 10% of 3 days)
-    expect(defaultWarnFor({ type: "interval", every: 30, unit: "days" }, 0)).toBe(3 * DAY);
-  });
 });

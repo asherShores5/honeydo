@@ -4,6 +4,8 @@
 export const TZ = "America/Los_Angeles";
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
+/** How far ahead of the server a device clock may be when it says "done now". */
+export const CLOCK_SLACK_MS = 60_000;
 
 const fmt = new Intl.DateTimeFormat("en-US", {
   timeZone: TZ,

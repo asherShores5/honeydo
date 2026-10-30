@@ -65,63 +65,90 @@ function findTag(word: string, tags: ViewTag[]): { tag?: ViewTag; error?: string
   return { error: `no Tag called #${word}` };
 }
 
+/** The longest Interval the server accepts (rules.ts). */
+export const INTERVAL_EVERY_MAX = 1000;
+
+/**
+ * Title words first, then shorthand. A shorthand-looking word before any title (e.g. "weekly
+ * report") stays in the title; once the shorthand starts, anything it can't read is an error,
+ * never a guess.
+ */
 export function parseQuickAdd(line: string, ctx: QuickAddContext): QuickAddResult {
   const words = line.trim().split(/\s+/).filter(Boolean);
   const errors: string[] = [];
   const title: string[] = [];
   const tags: string[] = [];
+  const schedules: (Recurrence | "weekdays")[] = [];
   let assigneeId: UserId | undefined;
   let interval: { every: number; unit: "hours" | "days" | "weeks" } | undefined;
   let byWeekday: number[] | undefined;
   let at: string | undefined;
+  let inShorthand = false;
+  /** A word the shorthand didn't take: title before the shorthand starts, an error after. */
+  const plain = (w: string) => (inShorthand ? errors.push(`couldn't read "${w}" after the shorthand`) : title.push(w));
+  const setInterval = (every: number, unit: "hours" | "days" | "weeks") => {
+    interval = { every, unit };
+    schedules.push({ type: "interval", every, unit });
+  };
 
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const lower = w.toLowerCase();
+    const hasTitle = title.length > 0;
     if (w.startsWith("#") && w.length > 1) {
+      inShorthand = true;
       const { tag, error } = findTag(w.slice(1), ctx.tags);
       if (tag) tags.includes(tag.id) || tags.push(tag.id);
       else errors.push(error!);
     } else if (w.startsWith("@") && w.length > 1) {
+      inShorthand = true;
       const name = w.slice(1).toLowerCase();
-      const m = name === "me" ? ctx.me : ctx.members.find((x) => x.names.some((n) => n.toLowerCase() === name))?.userId;
-      if (m) assigneeId = m;
-      else errors.push(`no one called @${w.slice(1)}`);
-    } else if (lower === "daily") {
-      interval = { every: 1, unit: "days" };
-    } else if (lower === "weekly") {
-      interval = { every: 1, unit: "weeks" };
+      const matches = name === "me" ? [ctx.me] : ctx.members.filter((x) => x.names.some((n) => n.toLowerCase() === name)).map((x) => x.userId);
+      if (matches.length === 1) assigneeId = matches[0];
+      else errors.push(matches.length ? `@${w.slice(1)} matches more than one Member` : `no one called @${w.slice(1)}`);
+    } else if ((lower === "daily" || lower === "weekly") && hasTitle) {
+      inShorthand = true;
+      setInterval(1, lower === "daily" ? "days" : "weeks");
     } else if (lower === "every" && i + 1 < words.length) {
       const next = words[i + 1].toLowerCase();
       const compact = /^(\d+)([a-z]+)$/.exec(next);
       const days = next.split(",").map(weekday);
-      if (compact && UNITS[compact[2]]) {
-        interval = { every: +compact[1], unit: UNITS[compact[2]] };
+      const unitAfter = words[i + 2]?.toLowerCase();
+      if (compact) {
+        if (!UNITS[compact[2]]) errors.push(`can't read "every ${next}" (use hours, days or weeks)`);
+        else setInterval(+compact[1], UNITS[compact[2]]);
+        inShorthand = true;
         i += 1;
-      } else if (/^\d+$/.test(next) && UNITS[words[i + 2]?.toLowerCase()]) {
-        interval = { every: +next, unit: UNITS[words[i + 2].toLowerCase()] };
-        i += 2;
+      } else if (/^\d+$/.test(next)) {
+        if (!UNITS[unitAfter]) errors.push(`can't read "every ${next}${unitAfter ? ` ${unitAfter}` : ""}" (use hours, days or weeks)`);
+        else setInterval(+next, UNITS[unitAfter]);
+        inShorthand = true;
+        i += unitAfter ? 2 : 1;
       } else if (UNITS[next]) {
-        interval = { every: 1, unit: UNITS[next] };
+        setInterval(1, UNITS[next]);
+        inShorthand = true;
         i += 1;
       } else if (days.every((d) => d !== undefined)) {
         byWeekday = [...new Set(days as number[])].sort((a, b) => a - b);
+        schedules.push("weekdays");
+        inShorthand = true;
         i += 1;
       } else {
-        title.push(w);
+        plain(w);
       }
-    } else if (lower === "at" && i + 1 < words.length && (byWeekday || /\d/.test(words[i + 1]))) {
-      const t = clock(words[i + 1]);
-      if (t) at = t;
+    } else if (lower === "at" && i + 1 < words.length && inShorthand) {
+      const t = byWeekday ? clock(words[i + 1]) : undefined;
+      if (!byWeekday) errors.push("a time only goes with weekdays, e.g. every tue at 8pm");
+      else if (t) at = t;
       else errors.push(`"${words[i + 1]}" isn't a time (try 8pm or 20:00)`);
       i += 1;
     } else {
-      title.push(w);
+      plain(w);
     }
   }
 
-  if (interval && interval.every < 1) errors.push("repeat every 1 or more");
-  if (at && !byWeekday) errors.push("a time only goes with weekdays, e.g. every tue at 8pm");
+  if (schedules.length > 1) errors.push("use one schedule, e.g. every 3d or every tue");
+  if (interval && (interval.every < 1 || interval.every > INTERVAL_EVERY_MAX)) errors.push(`an Interval must be 1 to ${INTERVAL_EVERY_MAX}`);
   const text = title.join(" ").trim();
   if (!text) errors.push("add a title before the shorthand");
   if (errors.length) return { ok: false, errors };

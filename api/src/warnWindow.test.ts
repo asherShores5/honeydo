@@ -33,6 +33,12 @@ describe("Warn window override", () => {
     await expect(put({ ...bath, warnWindow })).rejects.toThrow(/ValidationError/);
   });
 
+  it("caps a two-day-a-week schedule at its shortest gap", async () => {
+    const binDays = { ...bath, id: "bins", recurrence: JSON.stringify({ type: "calendar", freq: "weekly", byWeekday: [1, 4] }) };
+    expect((await put({ ...binDays, warnWindow: 3 * DAY })).item.warnWindow).toBe(3 * DAY);
+    await expect(put({ ...binDays, warnWindow: 4 * DAY })).rejects.toThrow(/ValidationError/);
+  });
+
   it("caps a weekly Calendar schedule at a week", async () => {
     expect((await put({ ...trash, warnWindow: 7 * DAY })).item.warnWindow).toBe(7 * DAY);
     await expect(put({ ...trash, warnWindow: 8 * DAY })).rejects.toThrow(/ValidationError/);

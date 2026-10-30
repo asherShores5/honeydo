@@ -3,6 +3,7 @@ import { useState } from "react";
 import { parseQuickAdd } from "@aubi/shared";
 import { saveItem, toast, useStore } from "../store";
 import { newId } from "../format";
+import { quickAddMembers } from "../quickAdd";
 
 export function QuickAdd() {
   const me = useStore((s) => s.me!);
@@ -13,10 +14,7 @@ export function QuickAdd() {
 
   function add() {
     if (!line.trim()) return;
-    const members = Object.values({ ...profiles, [me.userId]: me }).map((p) => ({
-      userId: p.userId,
-      names: [p.displayName, p.username].filter((n): n is string => !!n).map((n) => n.split(/\s+/)[0]),
-    }));
+    const members = quickAddMembers(Object.values({ ...profiles, [me.userId]: me }));
     const r = parseQuickAdd(line, { me: me.userId, members, tags: Object.values(tags) });
     if (!r.ok) return setErrors(r.errors);
     // New items start shared, like the Editor's.

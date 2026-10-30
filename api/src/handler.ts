@@ -9,7 +9,7 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
-import { fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
+import { CLOCK_SLACK_MS, fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
   UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
   validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
@@ -331,7 +331,7 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
   const item = await getItemFor(ctx, args.itemId);
   const now = Date.now();
   // Backdating is allowed (offline queue, "did it at 7am"), future timestamps are not.
-  const at = Math.min(Math.round(args.at ?? now), now + 60_000);
+  const at = Math.min(Math.round(args.at ?? now), now + CLOCK_SLACK_MS);
   if ((args.note ?? "").length > 1000) throw new UserError("ValidationError", "note too long");
   const note = args.note || undefined;
   // The Completion and its Activity entry are written together. The deterministic key makes

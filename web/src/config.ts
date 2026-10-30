@@ -6,6 +6,8 @@ export interface Config {
   usernames: string[];
   /** Web Push VAPID public key (base64url), from SSM at deploy time. Missing in configs cached before M4. */
   vapidPublicKey?: string;
+  /** The passkey relying party ID. Missing in configs cached before M6: fall back to the hostname. */
+  passkeyDomain?: string;
 }
 
 let config: Config | undefined;

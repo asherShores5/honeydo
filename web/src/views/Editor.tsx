@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { COMMENT_MAX, DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
+import { COMMENT_MAX, DAY, HOUR, defaultWarnWindowFor, type Item, type Recurrence, type Severity } from "@aubi/shared";
 import { addComment, loadComments, loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
 import { ago, fromLocalInput, newId, span, toLocalInput, when } from "../format";
 import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
 import type { TaskDraft } from "../noteToTask";
-import { defaultWarnFor, warnFromInput, warnToInput, type WarnUnit } from "../warnWindow";
+import { warnFromInput, warnToInput, type WarnUnit } from "../warnWindow";
+import { snoozeChoices } from "../rowActions";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 type Mode = "interval" | "weekly" | "monthly" | "once";
@@ -163,18 +164,21 @@ export function Editor({ item, prefill, onSaved, onClose }: {
         {mode === "once" && (
           <label>Due <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
         )}
-        {mode !== "once" && (
+        {mode !== "once" && (() => {
+          const fallback = span(defaultWarnWindowFor(recurrence(mode)));
+          return (
           <div className="row">
             Turn yellow
-            <input type="number" min={1} className="num" value={warn.value} placeholder={span(defaultWarnFor(recurrence(mode), Date.now()))}
+            <input type="number" min={1} className="num" value={warn.value} placeholder={fallback}
               onChange={(e) => setWarn({ ...warn, value: e.target.value })} aria-label="Warn window" />
             <select value={warn.unit} onChange={(e) => setWarn({ ...warn, unit: e.target.value as WarnUnit })}>
               <option value="hours">hours</option><option value="days">days</option>
             </select>
-            <span className="hint">before it's due{warn.value ? "" : ` (default ${span(defaultWarnFor(recurrence(mode), Date.now()))})`}</span>
+            <span className="hint">before it's due{warn.value ? "" : ` (default ${fallback})`}</span>
             {!warnCheck.ok && <span className="error">{warnCheck.error}</span>}
           </div>
-        )}
+          );
+        })()}
         {!item && mode !== "once" && (
           <label>Last done <small>(optional — otherwise it's due now)</small>
             <input type="datetime-local" value={lastDone} max={toLocalInput(Date.now())} onChange={(e) => setLastDone(e.target.value)} />
@@ -220,9 +224,10 @@ export function Editor({ item, prefill, onSaved, onClose }: {
         {item && live && (
           <>
             <div className="row actions">
-              <button onClick={() => (snooze(item.id, Date.now() + DAY), onClose())}>Snooze 1 day</button>
+              {snoozeChoices(Date.now()).map((c) => (
+                <button key={c.label} onClick={() => (snooze(item.id, c.until), onClose())}>Snooze {c.label.toLowerCase()}</button>
+              ))}
               {live.snoozedUntil && <button onClick={() => snooze(item.id, undefined)}>Unsnooze</button>}
-              <button onClick={() => (snooze(item.id, Date.now() + 3 * HOUR), onClose())}>Snooze 3h</button>
             </div>
             <h3>History</h3>
             <ul className="history">

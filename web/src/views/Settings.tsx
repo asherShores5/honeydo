@@ -3,6 +3,7 @@ import { readAlertPrefs, type AlertPrefs, type Severity } from "@aubi/shared";
 import { deletePasskey, listPasskeys, registerPasskey, signOut } from "../auth";
 import { passkeyRows, type PasskeyRow } from "../passkeys";
 import { when } from "../format";
+import { getConfig } from "../config";
 import { removeTag, saveProfile, saveTag, toast, useStore } from "../store";
 import { groupTags, tagId } from "../tags";
 import { releaseThisDevice } from "../notifications";
@@ -19,7 +20,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [passkeys, setPasskeys] = useState<PasskeyRow[]>();
   const [newTag, setNewTag] = useState({ name: "", group: "Category" });
 
-  const loadPasskeys = () => listPasskeys().then((p) => setPasskeys(passkeyRows(p, location.hostname)), () => {});
+  const loadPasskeys = () => listPasskeys().then((p) => setPasskeys(passkeyRows(p, getConfig().passkeyDomain ?? location.hostname)), () => {});
   useEffect(() => void loadPasskeys(), []);
 
   async function removePasskey(p: PasskeyRow) {

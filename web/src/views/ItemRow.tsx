@@ -22,8 +22,14 @@ export function ItemRow({ item, now, tags, onOpen, onDone, onSnooze, onActions }
   const swiping = useRef(false);
   const justSwiped = useRef(false);
   const [dx, setDx] = useState(0);
-  const reset = () => ((start.current = null), (swiping.current = false), setDx(0));
-  const down = (e: PointerEvent) => void (start.current = { x: e.clientX, y: e.clientY });
+  function reset() {
+    start.current = null;
+    swiping.current = false;
+    setDx(0);
+  }
+  function down(e: PointerEvent) {
+    start.current = { x: e.clientX, y: e.clientY };
+  }
   const move = (e: PointerEvent<HTMLLIElement>) => {
     if (!start.current) return;
     const [mx, my] = [e.clientX - start.current.x, e.clientY - start.current.y];
@@ -43,7 +49,7 @@ export function ItemRow({ item, now, tags, onOpen, onDone, onSnooze, onActions }
     }
     reset();
     if (action === "done") onDone();
-    else if (action === "snooze") onActions?.();
+    else if (action === "actions") onActions?.();
   };
 
   const st = status(item, now);
@@ -54,7 +60,11 @@ export function ItemRow({ item, now, tags, onOpen, onDone, onSnooze, onActions }
       className={`item ${st}${dx ? " swiping" : ""}`}
       style={dx ? { transform: `translateX(${dx}px)` } : undefined}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={reset}
-      onClickCapture={(e) => justSwiped.current && (e.stopPropagation(), e.preventDefault())}
+      onClickCapture={(e) => {
+        if (!justSwiped.current) return;
+        e.stopPropagation();
+        e.preventDefault();
+      }}
     >
       <button className="body" onClick={onOpen}>
         <span className="dot" aria-label={LABEL[st]} />
