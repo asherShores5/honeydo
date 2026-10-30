@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { COMMENT_MAX, DAY, HOUR, fromWall, type Item, type Recurrence, type Severity } from "@aubi/shared";
 import { addComment, loadComments, loadCompletions, nameOf, saveItem, snooze, toInput, undoCompletion, useStore, completeItem } from "../store";
-import { ago, newId, span, toLocalInput, when } from "../format";
+import { ago, fromLocalInput, newId, span, toLocalInput, when } from "../format";
 import { groupTags } from "../tags";
 import { assigneeWhenPrivate } from "../privateAssignee";
 import type { TaskDraft } from "../noteToTask";
@@ -9,11 +9,6 @@ import { defaultWarnFor, warnFromInput, warnToInput, type WarnUnit } from "../wa
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 type Mode = "interval" | "weekly" | "monthly" | "once";
-
-function fromLocalInput(v: string): number | undefined {
-  const m = v.match(/^(\d+)-(\d+)-(\d+)T(\d+):(\d+)$/);
-  return m ? fromWall(+m[1], +m[2], +m[3], +m[4], +m[5]) : undefined;
-}
 
 /**
  * `prefill` pre-fills a new item as a one-off Task (m2/03: "Make Task" on a Note); `onSaved` hears
