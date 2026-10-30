@@ -7,3 +7,4 @@ export * from "./handoff";
 export * from "./visibility";
 export * from "./activity";
 export * from "./fridge";
+export * from "./views";

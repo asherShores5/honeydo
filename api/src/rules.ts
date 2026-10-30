@@ -1,5 +1,5 @@
 // Pure validation + access rules, kept free of AWS calls so they can be unit-tested.
-import { COMMENT_MAX, NOTE_MAX, SLOTS_PER_SEVERITY, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
+import { COMMENT_MAX, NOTE_MAX, SAVED_VIEWS_MAX, SLOTS_PER_SEVERITY, VIEW_LAYOUTS, VIEW_NAME_MAX, VIEW_SORTS, VIEW_TAGS_MAX, WHO, type AlertPrefs, type Chore, type Item, type Recurrence, type Task } from "@aubi/shared";
 
 export { canSee } from "@aubi/shared";
 
@@ -95,17 +95,27 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
   return fields;
 }
 
-const PROFILE_KEYS = ["displayName", "color", "theme", "density", "defaultView", "savedViews", "alertPrefs", "setupComplete"] as const;
+const PROFILE_KEYS = ["displayName", "color", "theme", "density", "alertPrefs", "setupComplete"] as const;
+/** Own-only Profile fields with their own mutation (saveViews), since putProfile fans out to the partner. */
+const VIEW_KEYS = ["defaultView", "savedViews"] as const;
+
+/** AWSJSON arrives as a string (or already parsed in tests); cap its size before parsing. */
+function parseJsonField(k: string, v: unknown): unknown {
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  if (s.length > 20_000) throw new UserError("ValidationError", `${k} too large`);
+  return JSON.parse(s);
+}
 
 export function validateProfileInput(input: Record<string, unknown>) {
+  for (const k of VIEW_KEYS) {
+    if (input[k] !== undefined) throw new UserError("ValidationError", `${k} is saved with saveViews`);
+  }
   const out: Record<string, unknown> = {};
   for (const k of PROFILE_KEYS) {
     if (input[k] === undefined) continue;
     const v = input[k];
-    if (["defaultView", "savedViews", "alertPrefs"].includes(k)) {
-      const s = typeof v === "string" ? v : JSON.stringify(v);
-      if (s.length > 20_000) throw new UserError("ValidationError", `${k} too large`);
-      out[k] = JSON.parse(s);
+    if (k === "alertPrefs") {
+      out[k] = parseJsonField(k, v);
     } else if (k === "setupComplete") {
       out[k] = Boolean(v);
     } else {
@@ -120,6 +130,45 @@ export function validateProfileInput(input: Record<string, unknown>) {
     throw new UserError("ValidationError", "set a Handoff time to finish setup");
   }
   return out;
+}
+
+/** saveViews input: either or both of my Saved views and my default view. */
+export function validateViewsInput(input: { savedViews?: unknown; defaultView?: unknown }) {
+  const out: { savedViews?: unknown; defaultView?: unknown } = {};
+  if (input.savedViews != null) validateSavedViews((out.savedViews = parseJsonField("savedViews", input.savedViews)));
+  if (input.defaultView != null) validateSavedView((out.defaultView = parseJsonField("defaultView", input.defaultView)));
+  if (!Object.keys(out).length) throw new UserError("ValidationError", "nothing to save");
+  return out;
+}
+
+/** Same cap as a Tag group name in putTag. */
+const TAG_GROUP_MAX = 40;
+const SAVED_VIEW_KEYS = ["id", "name", "tags", "who", "sort", "layout", "boardGroup", "pinned"];
+
+/** One Saved view (or the default view): known keys only, each in range. */
+function validateSavedView(v: unknown): void {
+  const bad = (msg: string): never => {
+    throw new UserError("ValidationError", msg);
+  };
+  if (!v || typeof v !== "object" || Array.isArray(v)) bad("a Saved view must be an object");
+  const sv = v as Record<string, unknown>;
+  for (const k of Object.keys(sv)) if (!SAVED_VIEW_KEYS.includes(k)) bad(`unknown Saved view field ${k}`);
+  if (typeof sv.id !== "string" || !ID_RE.test(sv.id)) bad("bad Saved view id");
+  if (typeof sv.name !== "string" || !sv.name.trim() || sv.name.length > VIEW_NAME_MAX) bad(`a Saved view needs a name of 1-${VIEW_NAME_MAX} characters`);
+  if (!Array.isArray(sv.tags) || sv.tags.length > VIEW_TAGS_MAX || !sv.tags.every((t) => typeof t === "string" && ID_RE.test(t))) bad("bad Saved view tags");
+  if (!(WHO as readonly unknown[]).includes(sv.who)) bad("bad Saved view who");
+  if (sv.sort !== undefined && !(VIEW_SORTS as readonly unknown[]).includes(sv.sort)) bad("bad Saved view sort");
+  if (sv.layout !== undefined && !(VIEW_LAYOUTS as readonly unknown[]).includes(sv.layout)) bad("bad Saved view layout");
+  if (sv.boardGroup !== undefined && (typeof sv.boardGroup !== "string" || sv.boardGroup.length > TAG_GROUP_MAX)) bad("bad Saved view Tag group");
+  if (sv.layout === "board" && !sv.boardGroup) bad("a board Saved view needs a Tag group");
+  if (sv.pinned !== undefined && typeof sv.pinned !== "boolean") bad("bad Saved view pinned");
+}
+
+function validateSavedViews(v: unknown): void {
+  if (!Array.isArray(v)) throw new UserError("ValidationError", "Saved views must be a list");
+  if (v.length > SAVED_VIEWS_MAX) throw new UserError("ValidationError", `at most ${SAVED_VIEWS_MAX} Saved views`);
+  v.forEach(validateSavedView);
+  if (new Set(v.map((sv) => sv.id)).size !== v.length) throw new UserError("ValidationError", "Saved view ids must be unique");
 }
 
 const ALERT_PREF_KEYS = ["slots", "quietStart", "quietEnd", "handoffAt", "overdueAlerts"];

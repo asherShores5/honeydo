@@ -76,8 +76,8 @@ The code is on GitHub in a public repo, by choice, and `prod` auto-deploys.
 
 | Item | Why | Needs approval? |
 |---|---|---|
-| Delete test items and test Activity entries | Leftovers from launch testing | Approved 2026-10-29 |
-| Delete the old `aubi` certificate DNS record | Harmless leftover from the domain move | Approved 2026-10-29 |
+| Delete test items and test Activity entries | Leftovers from launch testing | Done 2026-10-30 |
+| Delete the old `aubi` certificate DNS record | Harmless leftover from the domain move | Done 2026-10-30 |
 | Turn on cost tracking for the `app` tag | The budget alert can only track app costs once AWS recognizes the tag (~24h after deploy) | No |
 | "Remove passkey" button in Settings | The old `aubi` passkey still shows in the count | No |
 
