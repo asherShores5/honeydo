@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DAY, HOUR } from "@aubi/shared";
-import { warnFromInput, warnToInput } from "./warnWindow";
+import { warnFromInput, warnPlaceholder, warnToInput } from "./warnWindow";
 
 const every3d = { type: "interval", every: 3, unit: "days" } as const;
 
@@ -21,3 +21,13 @@ describe("Warn window field (m6/04)", () => {
   });
 
 });
+
+describe("warnPlaceholder", () => {
+  it("shows the default as a plain number in the chosen unit", () => {
+    expect(warnPlaceholder(DAY, "days")).toBe("1");
+    expect(warnPlaceholder(DAY, "hours")).toBe("24");
+    expect(warnPlaceholder(12 * HOUR, "days")).toBe("0.5");
+    expect(warnPlaceholder(8 * HOUR, "days")).toBe("0.3");
+  });
+});
+

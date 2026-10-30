@@ -182,9 +182,9 @@ export async function seed(now = Date.now()) {
   const items = [
     chore("dishes", "Dishes", { type: "interval", every: 1, unit: "days" }, ["loc-kitchen", "cat-clean"]),
     chore("bath", "Clean bathroom", { type: "interval", every: 7, unit: "days" }, ["loc-bath", "cat-clean"]),
-    chore("trash", "Take out trash", { type: "calendar", freq: "weekly", byWeekday: [2], at: "20:00" }),
+    { ...chore("trash", "Take out trash", { type: "calendar", freq: "weekly", byWeekday: [2], at: "20:00" }), severity: "high" },
     chore("plants", "Water plants", { type: "interval", every: 3, unit: "days" }),
-    { id: "groceries", kind: "task", title: "Buy groceries", tags: [], visibility: "shared", archived: false, dueAt: now + DAY },
+    { id: "groceries", kind: "task", title: "Buy groceries", tags: [], visibility: "shared", archived: false, dueAt: now + DAY, severity: "medium" },
     { id: "gift", kind: "task", title: "Birthday gift", tags: [], visibility: `private:${MEMBERS.asher.userId}`, archived: false },
   ];
   for (const input of items) await as("asher", "putItem", { input });
