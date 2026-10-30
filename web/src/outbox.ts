@@ -8,7 +8,9 @@ export type ItemInput = Pick<Chore, InputKey> | Pick<Task, InputKey>;
 export type Op =
   | { id: string; type: "putItem"; input: ItemInput; expectedVersion?: number; changed: (keyof ItemInput)[] }
   | { id: string; type: "completeItem"; itemId: string; at: number; note?: string }
-  | { id: string; type: "undoCompletion"; itemId: string; at: number };
+  | { id: string; type: "undoCompletion"; itemId: string; at: number }
+  // m2/03: queued behind the new Task's putItem, so the server already has the Task. itemId = the Task.
+  | { id: string; type: "markNoteTasked"; noteId: string; itemId: string };
 
 export const opItemId = (op: Op) => (op.type === "putItem" ? op.input.id : op.itemId);
 

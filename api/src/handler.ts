@@ -9,12 +9,13 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
-import { readAlertPrefs, type Item } from "@aubi/shared";
+import { fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
-  UserError, canSee, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
-  type ItemInput, type PushSubscriptionInput,
+  UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateDeviceId,
+  validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
+  type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
-import { PK, ifConditionFailed, pushKey } from "./table";
+import { PK, commentKey, handoffKey, ifConditionFailed, noteKey, pushKey } from "./table";
 
 const TABLE = process.env.TABLE_NAME!;
 const ALLOWED = (process.env.ALLOWED_USERNAMES ?? "").split(",").filter(Boolean);
@@ -60,8 +61,12 @@ async function queryPrefix(prefix: string, opts: { limit?: number; newestFirst?:
 
 const ACTIVITY_SIZE = 100;
 
-/** The newest ACTIVITY_SIZE Activity events `ctx` may see, newest first. Pages past events hidden from them. */
-async function visibleActivity(ctx: Ctx) {
+/**
+ * The newest ACTIVITY_SIZE Activity events `ctx` may see, newest first. Pages past events hidden
+ * from them: Private to the partner when logged, or about an Item in `hiddenItems` (one that has
+ * since gone Private, so its earlier events and Comments stop reaching the partner).
+ */
+async function visibleActivity(ctx: Ctx, hiddenItems: Set<unknown> = new Set()) {
   const out: Record<string, unknown>[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
@@ -75,7 +80,7 @@ async function visibleActivity(ctx: Ctx) {
         ExclusiveStartKey,
       }),
     );
-    out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId)));
+    out.push(...(r.Items ?? []).filter((f) => canSee(f.visibility as string, ctx.userId) && !hiddenItems.has(f.itemId)));
     ExclusiveStartKey = r.LastEvaluatedKey;
   } while (ExclusiveStartKey && out.length < ACTIVITY_SIZE);
   return out.slice(0, ACTIVITY_SIZE);
@@ -97,7 +102,23 @@ function profileOut(rec: Record<string, unknown>) {
   const p = strip<Record<string, unknown>>(rec);
   for (const k of ["defaultView", "savedViews", "alertPrefs"]) p[k] = p[k] ?? null;
   if (p.alertPrefs) p.alertPrefs = readAlertPrefs(p.alertPrefs);
+  // Own-only fields: the partner reads this Profile (snapshot, onProfileChange), so they are
+  // always null here and only `me` fills them in (ownProfileOut).
+  p.activitySeenAt = p.lastHandoffAt = p.lastHandoffSince = null;
   return p;
+}
+
+/**
+ * The caller's own Profile, with the fields only they may read: Activity last seen, and their last
+ * Handoff (from its HANDOFF record) for the in-app card.
+ */
+function ownProfileOut(rec: Record<string, unknown>, handoff?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...profileOut(rec),
+    activitySeenAt: rec.activitySeenAt ?? null,
+    lastHandoffAt: handoff?.lastHandoffAt ?? null,
+    lastHandoffSince: handoff?.lastHandoffSince ?? null,
+  };
 }
 
 /**
@@ -129,19 +150,30 @@ async function getItemFor(ctx: Ctx, id: string) {
   return r.Item;
 }
 
+/** What an Activity event is about: an Item (itemSubject), or a Note for "posted" (no itemId). */
+interface ActivitySubject {
+  itemId?: string;
+  title: string;
+  visibility: string;
+}
+
+const itemSubject = (item: Record<string, unknown>): ActivitySubject => ({
+  itemId: item.id as string, title: item.title as string, visibility: item.visibility as string,
+});
+
 /** One Activity event record. `eventId` defaults to a random one; pass a deterministic one when the event mirrors a record. */
-function activityRecord(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string, eventId?: string) {
+function activityRecord(ctx: Ctx, type: string, subject: ActivitySubject, detail?: string, eventId?: string) {
   const at = Date.now();
   const id = eventId ?? `${at}-${Math.random().toString(36).slice(2, 8)}`;
   return {
     PK, SK: `FEED#${String(at).padStart(15, "0")}#${id}`, id, at, by: ctx.userId, type,
-    itemId: item.id, title: item.title, detail, visibility: item.visibility,
+    itemId: subject.itemId, title: subject.title, detail, visibility: subject.visibility,
     ttl: Math.floor(at / 1000) + FEED_TTL_S,
   };
 }
 
 async function feed(ctx: Ctx, type: string, item: Record<string, unknown>, detail?: string) {
-  await ddb.send(new PutCommand({ TableName: TABLE, Item: activityRecord(ctx, type, item, detail) }));
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: activityRecord(ctx, type, itemSubject(item), detail) }));
 }
 
 async function userIds(): Promise<string[]> {
@@ -178,27 +210,41 @@ function itemUpdate(itemId: string, set: Record<string, unknown>, remove: string
 
 // ---- resolvers -------------------------------------------------------------
 
-async function me(ctx: Ctx) {
+/** The caller's USER# record, created on first sight. */
+async function profileRecord(ctx: Ctx): Promise<Record<string, unknown>> {
   const key = { PK, SK: `USER#${ctx.userId}` };
   const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: key }));
-  if (r.Item) return profileOut(r.Item);
+  if (r.Item) return r.Item;
   const rec = { ...key, userId: ctx.userId, username: ctx.username, setupComplete: false, updatedAt: Date.now() };
   await ddb.send(new PutCommand({ TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" })).catch(() => {});
-  return profileOut(rec);
+  return rec;
+}
+
+async function me(ctx: Ctx) {
+  const [rec, handoff] = await Promise.all([
+    profileRecord(ctx),
+    ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: handoffKey(ctx.userId) } })).then((r) => r.Item),
+  ]);
+  return ownProfileOut(rec, handoff);
 }
 
 async function snapshot(ctx: Ctx) {
-  const [items, tags, profiles, feedRecs] = await Promise.all([
-    queryPrefix("ITEM#"),
+  const itemsP = queryPrefix("ITEM#");
+  const hiddenItems = (recs: Record<string, unknown>[]) =>
+    new Set(recs.filter((i) => !canSee(i.visibility as string, ctx.userId)).map((i) => i.id));
+  const [items, tags, profiles, feedRecs, notes] = await Promise.all([
+    itemsP,
     queryPrefix("TAG#"),
     queryPrefix("USER#"),
-    visibleActivity(ctx),
+    itemsP.then((recs) => visibleActivity(ctx, hiddenItems(recs))),
+    fridge(ctx),
   ]);
   return {
     items: items.filter((i) => canSee(i.visibility as string, ctx.userId)).map(itemOut),
     tags: tags.map((t) => strip(t)),
     profiles: profiles.map(profileOut),
     feed: feedRecs.map((f) => strip(f)),
+    fridgeNotes: notes,
     serverTime: Date.now(),
   };
 }
@@ -272,7 +318,7 @@ async function completeItem(ctx: Ctx, args: { itemId: string; at?: number | null
               ConditionExpression: "attribute_not_exists(SK)",
             },
           },
-          { Put: { TableName: TABLE, Item: activityRecord(ctx, "completed", item, note, `done-${args.itemId}-${at}`) } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "completed", itemSubject(item), note, `done-${args.itemId}-${at}`) } },
         ],
       }),
     )
@@ -309,7 +355,7 @@ async function undoCompletion(ctx: Ctx, args: { itemId: string; at: number }) {
               ConditionExpression: "attribute_exists(SK)",
             },
           },
-          { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", item) } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "undone", itemSubject(item)) } },
         ],
       }),
     )
@@ -399,7 +445,7 @@ async function deleteTag(_ctx: Ctx, args: { id: string }) {
 }
 
 async function putProfile(ctx: Ctx, args: { input: Record<string, unknown> }) {
-  const current = await me(ctx); // also ensures the record exists
+  const current = profileOut(await profileRecord(ctx)); // also ensures the record exists
   const fields = validateProfileInput(args.input);
   // Alert prefs patch the stored ones, so toggling one pref (e.g. overdue alerts off) keeps the
   // rest, the Handoff time included. Saving also rewrites a pre-M4 `digestAt` as `handoffAt`.
@@ -445,9 +491,223 @@ async function deletePushSubscription(ctx: Ctx, args: { deviceId: string }) {
   return { deviceId, enabled: false };
 }
 
+/**
+ * Save when the caller last opened Activity; returns the stored time. Its own mutation, not a
+ * putProfile field, because onProfileChange fans putProfile out to the partner. It only moves
+ * forward and never past the server's now: a stale device can't bring old events back as unread,
+ * and a fast device clock can't hide events still to come.
+ */
+async function markActivitySeen(ctx: Ctx, args: { at: number }) {
+  const at = Math.min(validateActivitySeenAt(args.at), Date.now());
+  await profileRecord(ctx); // the Profile record exists
+  const r = await ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK, SK: `USER#${ctx.userId}` },
+        UpdateExpression: "SET activitySeenAt = :at",
+        ConditionExpression: "attribute_not_exists(activitySeenAt) OR activitySeenAt < :at",
+        ExpressionAttributeValues: { ":at": at },
+        ReturnValues: "ALL_NEW",
+      }),
+    )
+    .then((r) => r.Attributes, ifConditionFailed(undefined));
+  return (r ?? (await profileRecord(ctx))).activitySeenAt;
+}
+
+// ---- Fridge Notes (m2/02) ---------------------------------------------------
+// Notes are append-only NOTE#<id> records: after postNote only pinned and expiresAt change. Every
+// Note is shared, but it still carries a Visibility and goes through canSee, so the snapshot and
+// the onNoteChange filter treat it like an Item.
+
+/** Expired Notes are kept a week past expiry, then DynamoDB TTL removes them. */
+const NOTE_TTL_GRACE_S = 7 * 24 * 3600;
+
+const noteTtl = (expiresAt: number) => Math.ceil(expiresAt / 1000) + NOTE_TTL_GRACE_S;
+
+function noteOut(rec: Record<string, unknown>): Note {
+  return strip<Note>(rec);
+}
+
+/** The Notes the Fridge shows `ctx` now: none expired, pinned first, then newest first. */
+async function fridge(ctx: Ctx) {
+  const recs = (await queryPrefix("NOTE#")).filter((n) => canSee(n.visibility as string, ctx.userId));
+  return fridgeNotes(recs.map(noteOut), Date.now());
+}
+
+async function postNote(ctx: Ctx, args: NoteInput) {
+  const fields = validateNoteInput(args);
+  const now = Date.now();
+  const rec = {
+    PK, SK: noteKey(fields.id), ...fields, by: ctx.userId, at: now, visibility: "shared", updatedAt: now,
+    ttl: fields.expiresAt === undefined ? undefined : noteTtl(fields.expiresAt),
+  };
+  // The Note and its Activity entry go together, conditional on the ID being new: an outbox
+  // replay (or an ID collision) writes nothing and gets the stored Note back.
+  const written = await ddb
+    .send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" } },
+          {
+            Put: {
+              TableName: TABLE,
+              Item: activityRecord(ctx, "posted", { title: fields.text, visibility: "shared" }, undefined, `note-${fields.id}`),
+            },
+          },
+        ],
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (written) return noteOut(rec);
+  return getNote(ctx, fields.id);
+}
+
+async function getNote(ctx: Ctx, id: string) {
+  const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: noteKey(id) } }));
+  if (!r.Item || !canSee(r.Item.visibility as string, ctx.userId)) throw new UserError("NotFound", "note not found");
+  return noteOut(r.Item);
+}
+
+/** SET `set` (and REMOVE `remove`) on an existing Note; the only edits a Note allows. */
+async function updateNote(ctx: Ctx, id: string, set: Record<string, unknown>, remove: string[] = []) {
+  await getNote(ctx, id);
+  const fields = Object.keys({ ...set, updatedAt: 0 });
+  const values = { ...set, updatedAt: Date.now() } as Record<string, unknown>;
+  const r = await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK, SK: noteKey(id) },
+      UpdateExpression: "SET " + fields.map((f) => `${f} = :${f}`).join(", ") + (remove.length ? ` REMOVE ${remove.join(", ")}` : ""),
+      ConditionExpression: "attribute_exists(SK)",
+      ExpressionAttributeValues: Object.fromEntries(fields.map((f) => [`:${f}`, values[f]])),
+      ReturnValues: "ALL_NEW",
+    }),
+  );
+  return noteOut(r.Attributes!);
+}
+
+async function pinNote(ctx: Ctx, args: { id: string; pinned: boolean }) {
+  return updateNote(ctx, validateId(args.id, "note"), { pinned: args.pinned === true });
+}
+
+/** Set or clear (null) a Note's expiry. */
+async function setNoteExpiry(ctx: Ctx, args: { id: string; expiresAt?: number | null }) {
+  const id = validateId(args.id, "note");
+  const expiresAt = validateNoteExpiry(args.expiresAt);
+  return expiresAt === undefined
+    ? updateNote(ctx, id, {}, ["expiresAt", "ttl"])
+    : updateNote(ctx, id, { expiresAt, ttl: noteTtl(expiresAt) });
+}
+
+const FRIDGE_RESOLVERS = { postNote, pinNote, setNoteExpiry };
+
+// ---- Note to Task (m2/03) ---------------------------------------------------
+// "Make Task" keeps the Note on the Fridge and marks it with the Task it became (taskId). The Task
+// is a normal putItem, so its "created" entry is what Activity shows. The first Task wins: a
+// replay, or a second Task for the same Note, leaves the Note as it is. Only a shared Task is
+// linked: Notes are shared, so a Private Task's ID on one would reach the partner. For a Private
+// Task the Note stays unmarked, and that is not an error, so the queued op can't jam the outbox.
+
+async function markNoteTasked(ctx: Ctx, args: { id: string; taskId: string }) {
+  const id = validateId(args.id, "note");
+  const taskId = validateId(args.taskId, "task");
+  const note = await getNote(ctx, id);
+  const item = await getItemFor(ctx, taskId);
+  if (item.kind !== "task") throw new UserError("ValidationError", "only a Task can come from a Note");
+  if (note.taskId !== undefined || item.visibility !== "shared") return note;
+  const marked = await ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK, SK: noteKey(id) },
+        UpdateExpression: "SET taskId = :taskId, updatedAt = :now",
+        ConditionExpression: "attribute_exists(SK) AND attribute_not_exists(taskId)",
+        ExpressionAttributeValues: { ":taskId": taskId, ":now": Date.now() },
+        ReturnValues: "ALL_NEW",
+      }),
+    )
+    .then((r) => r.Attributes, ifConditionFailed(undefined));
+  return marked ? noteOut(marked) : getNote(ctx, id);
+}
+
+const NOTE_TO_TASK_RESOLVERS = { markNoteTasked };
+
+// ---- Comments (M2) ---------------------------------------------------------
+// A Comment is append-only and belongs to one Item. It is stamped with its Item's Visibility when
+// written, and a Member sees it only if both that stamp and the Item's current Visibility allow
+// (story 36). An Item that goes Private takes its old Comments with it, and its shared ones come
+// back if it is shared again; a Comment written while Private stays with its writer for good.
+
+function commentOut(rec: Record<string, unknown>) {
+  const { id, itemId, at, by, text } = rec;
+  return { id, itemId, at, by, text };
+}
+
+/** A Comment's stamp. Comments written before stamping followed their Item only, as if shared. */
+const commentStamp = (rec: Record<string, unknown>) => (rec.visibility as string | undefined) ?? "shared";
+
+/**
+ * The one Visibility that lets in exactly the Members both `a` and `b` let in, for the
+ * onCommentChange filter. Two different Members' Private gives "private:", which no one matches.
+ */
+function narrower(a: string, b: string) {
+  if (a === b || b === "shared") return a;
+  return a === "shared" ? b : "private:";
+}
+
+/** The Comments on one Item the caller can see, oldest first. */
+async function comments(ctx: Ctx, args: { itemId: string }) {
+  await getItemFor(ctx, args.itemId);
+  const recs = (await queryPrefix(commentKey(args.itemId, ""))).filter((c) => canSee(commentStamp(c), ctx.userId));
+  return recs.sort((a, b) => (a.at as number) - (b.at as number)).map(commentOut);
+}
+
+/**
+ * Add a Comment and its Activity entry. The client picks the ID, so a retry after a lost response
+ * writes nothing twice and returns the stored Comment. The CommentChange envelope carries the
+ * Item's Visibility (the Comment's stamp) for the onCommentChange filter; the write is conditional
+ * on the Item still having that Visibility, so a Comment can't be published as shared after the
+ * Item went Private. A replay publishes under the narrower of the stamp and the Item's Visibility now.
+ */
+async function addComment(ctx: Ctx, args: { itemId: string; id: string; text: string }) {
+  const { itemId, id, text } = validateCommentInput(args);
+  const item = await getItemFor(ctx, itemId);
+  const key = { PK, SK: commentKey(itemId, id) };
+  const rec = { ...key, id, itemId, at: Date.now(), by: ctx.userId, text, visibility: item.visibility };
+  const written = await ddb
+    .send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            ConditionCheck: {
+              TableName: TABLE,
+              Key: { PK, SK: `ITEM#${itemId}` },
+              ConditionExpression: "visibility = :vis",
+              ExpressionAttributeValues: { ":vis": item.visibility },
+            },
+          },
+          { Put: { TableName: TABLE, Item: rec, ConditionExpression: "attribute_not_exists(SK)" } },
+          { Put: { TableName: TABLE, Item: activityRecord(ctx, "commented", itemSubject(item), text, `comment-${id}`) } },
+        ],
+      }),
+    )
+    .then(() => true, ifConditionFailed(false));
+  if (written) return { comment: commentOut(rec), visibility: item.visibility as string };
+  // Either a replay (the Comment is there) or the Item's Visibility just changed: re-read both.
+  const stored = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  const now = await getItemFor(ctx, itemId);
+  if (!stored) throw new UserError("ConflictError", "item changed, retry");
+  if (stored.by !== ctx.userId) throw new UserError("ConflictError", "comment id taken");
+  return { comment: commentOut(stored), visibility: narrower(commentStamp(stored), now.visibility as string) };
+}
+
 const RESOLVERS: Record<string, (ctx: Ctx, args: any) => Promise<unknown>> = {
   me, snapshot, completions, putItem, completeItem, undoCompletion, putTag, deleteTag, putProfile,
-  putPushSubscription, deletePushSubscription,
+  putPushSubscription, deletePushSubscription, markActivitySeen,
+  ...FRIDGE_RESOLVERS,
+  ...NOTE_TO_TASK_RESOLVERS,
+  comments, addComment,
 };
 
 export async function handler(event: AppSyncResolverEvent<Record<string, unknown>>) {

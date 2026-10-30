@@ -145,7 +145,7 @@ _Avoid_: Board, kanban
 ### Talking
 
 **Activity**:
-The feed of automatic events: who did, created, edited, assigned or commented on what, and when.
+The feed of automatic events: who did, created, edited, assigned or commented on what, or posted a Note, and when.
 _Avoid_: Feed, log, history (History is the per-Item Completion list)
 
 **Comment**:

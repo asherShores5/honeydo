@@ -204,9 +204,9 @@ PK = `HH#<householdId>` for everything (one household → one partition, fine at
 |---|---|
 | Item | `ITEM#<id>` |
 | Completion | `DONE#<itemId>#<isoTs>` |
-| Comment | `CMT#<itemId>#<isoTs>#<id>` |
+| Comment | `CMT#<itemId>#<id>`: `id`, `itemId`, `at`, `by`, `text` (1-1000 chars). Append-only. The client picks `id`, so a retried `addComment` writes nothing twice. `visibility` is a stamp of the Item's Visibility when written: a Member sees the Comment only if both the stamp and the Item's current Visibility allow (`comments` checks both), so Comments go Private with their Item and one written while Private stays Private even if the Item is shared again (story 36). `addComment` publishes under the stamp on `onCommentChange` (a replay: under the narrower of the stamp and the Item's Visibility now) and logs a `commented` Activity event with the text |
 | Fridge note | `NOTE#<id>` |
-| Feed event | `FEED#<isoTs>#<id>` (TTL 1 year) |
+| Feed event | `FEED#<isoTs>#<id>` (TTL 1 year). Left out of a Member's snapshot if it was Private to the partner when logged, or if its Item is now Private to the partner |
 | Tag / tag group | `TAG#<id>`, `TGRP#<id>` |
 | Profile | `USER#<userId>` |
 | Saved view | `VIEW#<userId>#<id>` |
