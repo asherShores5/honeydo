@@ -76,9 +76,56 @@ describe("validation", () => {
     ["an empty device ID", { deviceId: "" }],
     ["a p256dh key that isn't base64url", { p256dh: "a b" }],
     ["an empty auth secret", { auth: "" }],
+    // The Notifier POSTs to the endpoint, so only real push services (no SSRF to anything else).
+    ["a host that isn't a push service", { endpoint: "https://example.com/push" }],
+    ["an internal host", { endpoint: "https://169.254.169.254/latest/meta-data" }],
+    ["an IPv4 literal", { endpoint: "https://10.0.0.1/x" }],
+    ["an IPv6 literal", { endpoint: "https://[::1]/x" }],
+    ["a look-alike host", { endpoint: "https://fcm.googleapis.com.evil.example/x" }],
+    ["a suffix without the dot", { endpoint: "https://evilpush.apple.com/x" }],
+    ["a bare apex", { endpoint: "https://push.apple.com/x" }],
+    ["userinfo", { endpoint: "https://user:pw@fcm.googleapis.com/fcm/send/x" }],
+    ["userinfo naming a push host", { endpoint: "https://fcm.googleapis.com@example.com/x" }],
+    ["an explicit non-443 port", { endpoint: "https://fcm.googleapis.com:8443/fcm/send/x" }],
+    ["a trailing-dot host", { endpoint: "https://fcm.googleapis.com./fcm/send/x" }],
   ])("rejects %s", async (_why, over) => {
     await expect(h.call(h.A, "putPushSubscription", sub(over))).rejects.toThrow(/ValidationError/);
     expect(pushRecords()).toEqual([]);
+  });
+
+  it.each([
+    "https://fcm.googleapis.com/fcm/send/abc",
+    "https://updates.push.services.mozilla.com/wpush/v2/abc",
+    "https://web.push.apple.com/QGx1",
+    "https://api.push.apple.com/3/device/abc",
+    "https://wns2-par02p.notify.windows.com/w/?token=abc",
+    "https://fcm.googleapis.com:443/fcm/send/abc",
+    "https://FCM.googleapis.com/fcm/send/abc",
+  ])("accepts %s", async (endpoint) => {
+    await expect(h.call(h.A, "putPushSubscription", sub({ endpoint }))).resolves.toMatchObject({ enabled: true });
+  });
+});
+
+describe("device cap", () => {
+  const fill = async (n: number) => {
+    for (let i = 1; i <= n; i++) await h.call(h.A, "putPushSubscription", sub({ deviceId: `dev-${i}` }));
+  };
+
+  it("a Member can have 10 devices; an 11th new one is refused", async () => {
+    await fill(10);
+    await expect(h.call(h.A, "putPushSubscription", sub({ deviceId: "dev-11" }))).rejects.toThrow(/ValidationError: .*10 devices/);
+    expect(pushRecords()).toHaveLength(10);
+  });
+
+  it("re-registering an existing device at the cap still works", async () => {
+    await fill(10);
+    await h.call(h.A, "putPushSubscription", sub({ deviceId: "dev-3", endpoint: "https://web.push.apple.com/NEW" }));
+    expect(pushRecords().find((r) => r.deviceId === "dev-3")?.endpoint).toBe("https://web.push.apple.com/NEW");
+  });
+
+  it("the cap is per Member: the partner's devices don't count", async () => {
+    await fill(10);
+    await expect(h.call(h.B, "putPushSubscription", sub())).resolves.toMatchObject({ enabled: true });
   });
 });
 
