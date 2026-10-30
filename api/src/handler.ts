@@ -11,7 +11,7 @@ import {
 import type { AppSyncResolverEvent, AppSyncIdentityCognito } from "aws-lambda";
 import { CLOCK_SLACK_MS, fridgeNotes, readAlertPrefs, type Item, type Note } from "@aubi/shared";
 import {
-  UserError, canSee, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
+  UserError, canSee, checkVisibilityChange, validateActivitySeenAt, validateItemInput, validateProfileInput, validatePushSubscription, validateViewsInput, validateDeviceId,
   validateCommentInput, validateId, validateNoteExpiry, validateNoteInput,
   type ItemInput, type NoteInput, type PushSubscriptionInput,
 } from "./rules";
@@ -303,6 +303,7 @@ async function putItem(ctx: Ctx, args: { input: ItemInput; expectedVersion?: num
   const key = { PK, SK: `ITEM#${fields.id}` };
   const existing = (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
   if (existing && !canSee(existing.visibility as string, ctx.userId)) throw new UserError("NotFound", "item not found");
+  checkVisibilityChange(existing, fields.visibility, ctx.userId);
   if (existing && args.expectedVersion != null && existing.version !== args.expectedVersion) {
     throw new UserError("ConflictError", `item is at version ${existing.version}`);
   }

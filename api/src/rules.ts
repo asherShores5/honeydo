@@ -103,7 +103,17 @@ export function validateItemInput(input: ItemInput, userId: string, users: strin
   return fields;
 }
 
-const PROFILE_KEYS = ["displayName", "color", "theme", "density", "alertPrefs", "setupComplete"] as const;
+/**
+ * Only an Item's creator may move it from shared to Private; otherwise the partner could make
+ * someone else's Item vanish from their phone. New Items and edits that keep the Visibility pass.
+ */
+export function checkVisibilityChange(existing: { visibility?: unknown; createdBy?: unknown } | undefined, visibility: string, userId: string) {
+  if (existing?.visibility === "shared" && visibility !== "shared" && existing.createdBy !== userId) {
+    throw new UserError("Forbidden", "only the Member who created an item can make it private");
+  }
+}
+
+const PROFILE_KEYS =["displayName", "color", "theme", "density", "alertPrefs", "setupComplete"] as const;
 /** Own-only Profile fields with their own mutation (saveViews), since putProfile fans out to the partner. */
 const VIEW_KEYS = ["defaultView", "savedViews"] as const;
 
