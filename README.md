@@ -43,7 +43,7 @@ Requires Node 22+.
 
 ```bash
 npm install
-npm test                       # unit tests (shared + api)
+npm test                       # unit tests (shared + api + web)
 npm run dev -w web             # local UI against the deployed API*
 ```
 
@@ -51,18 +51,19 @@ npm run dev -w web             # local UI against the deployed API*
 https://honeydo.ashershores.com/config.json. Passkeys only work on the real domain, so use
 password sign-in locally.
 
+Browser checks: see [e2e/README.md](e2e/README.md) (Playwright against a fake backend).
+
 ## Deploying
 
-Pushing to **`prod`** deploys via GitHub Actions. Pushes to `main` and PRs only run tests and
-a build.
-
-```bash
-git push origin main:prod      # promote main to production
-```
+`main` and `prod` are protected: changes land by PR with passing tests, and nobody can
+force-push. To release, open a PR from `main` into `prod` and merge it. The deploy job then
+waits in the GitHub **`production`** Environment until Asher approves it (Actions → the run →
+Review deployments). Pushes to `main` and PRs only run tests and a build.
 
 The workflow authenticates to AWS with GitHub OIDC; no AWS keys are stored in GitHub. The
-`honeydo-github-deploy` role trusts only `refs/heads/prod` of this repo and can only assume
-the CDK bootstrap roles.
+`honeydo-github-deploy` role trusts only this repo's `production` Environment (which only the
+`prod` branch can use) and can only assume the CDK bootstrap roles. Actions are pinned to commit
+SHAs, a repo setting requires that, and Dependabot proposes updates.
 
 Manual deploy from a machine with admin credentials: `npm run deploy`.
 
