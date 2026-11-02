@@ -21,7 +21,12 @@ mirrored on the Notion To Do card "Create aubi honey to do app".
 
 ## Working rules
 
-- Commit locally only; never push. CI runs on pushes to `main` and `prod`, and `prod` deploys.
+- Commit locally; push and open PRs only when Asher says. `main` and `prod` are protected
+  (PR + passing `test` check, no force-push), so work lands by branch → PR → `main`, and a
+  release is a PR `main` → `prod`.
+- A `prod` deploy waits in the GitHub `production` Environment for Asher's approval. Never
+  approve it on his behalf; give him the run link.
 - Commit as `asher.shores5@gmail.com` (set in this repo's git config).
 - Live AWS changes (deploys, deleting data or DNS records) need Asher's explicit go each time.
-- Tests: `npm test` (shared + api, vitest). Typecheck: `npm run typecheck -w shared -w api`.
+- Tests: `npm test` (shared + api + web, vitest). Typecheck: `npm run typecheck --workspaces --if-present`.
+  Browser checks: `e2e/` (see its README); run them after UI changes, and look at screenshots.

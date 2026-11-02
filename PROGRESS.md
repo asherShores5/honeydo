@@ -1,126 +1,74 @@
 # HoneyDo: Progress & Next Steps
 
-_Updated 2026-10-29_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
+_Updated 2026-11-02_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
 
 ## Where things stand
 
-The first version is live and in use on both phones. It does the core job: chores that reset
-when done, show green → yellow → red as they come due, and sync live between the two of us.
+All six planned milestones are live and in use on both phones. Since then: quick sort buttons,
+a Tasks tab, and a security hardening pass.
 
 ### Working today
 
 **Chores & tasks**
 - Repeating chores: "every N hours/days/weeks after it's done", or on fixed days (weekly on
   chosen weekdays, or monthly on chosen dates) at a set time.
-- One-off tasks with an optional due date.
-- Status colors:
-  - Green until it's close.
-  - Yellow starting at the larger of 1 day or 10% of the interval before it's due (a 20-day
-    chore goes yellow 2 days out).
-  - Red once it's overdue.
-- "Done" resets the chore. Undo appears right after, and any past completion can be removed
-  from the chore's history.
-- Snooze for 3 hours or 1 day. Archive chores you no longer need.
-- Optional "for" (assign to one of us), private items only you can see, notes, and an alert
-  severity (low/medium/high) saved for the notification feature.
+- One-off tasks with an optional due date. Done moves them to Finished; Undo brings them back.
+- Status colors: green, yellow when it's close (default: the larger of 1 day or 10% of the
+  interval, or a per-chore Warn window), red once overdue. A new chore reads "due now".
+- Snooze, archive, assign ("for"), private items only you can see, notes, and a severity that
+  sets how often overdue Dings repeat.
+- Quick add: `bath every 3d #baby @aubyn`.
+- Swipe right = Done; swipe left or ⋯ = Snooze choices and "Done at…" to backdate.
 
-**Views & filters**
-- On track / Overdue / Activity tabs.
-- Tag filters grouped by Category, Time of day, and Locale, plus a Who filter (mine, partner,
-  unassigned). Each person's last filter is remembered.
-- Activity feed of who did what and when.
+**Views**
+- Home tabs: On track, Overdue, Tasks, Finished, Activity (with an unread count), Fridge, Views,
+  plus any pinned Saved views.
+- Filters by tag group and by who, and sort buttons: Due date, Priority, A–Z. Both are
+  remembered per person.
+- Views: Today (by time of day), Calendar (upcoming and done), Tag board, History & stats.
+- Saved views pinned as tabs, separate for each of us.
 
-**Profiles**
-- Separate name, color, light/dark theme, and card/compact layout for each person.
-- Handoff time is set during first-run setup. It will be used once notifications ship.
-
-**Sync & reliability**
-- Changes show up on the other phone in about a second.
-- Works with a spotty connection: taps are queued and sent when back online, and edits made by
-  both of us at once are merged.
+**Together**
+- Live sync between phones in about a second; offline taps queue and send later.
+- Comments on items, the Fridge (notes with pin, expiry, and Make Task), Activity feed.
+- Notifications: overdue Dings (1–3×/day by severity, quiet hours respected, only to whoever is
+  responsible), a daily Handoff at each person's time, "Mark done" from the notification.
 
 **Sign-in & security**
-- Face ID (passkeys) after a one-time password. Only the two accounts exist, and sign-up is off.
-- Private items are blocked on the server, not just hidden in the app (tested).
+- Face ID (passkeys), with password sign-in kept as a permanent backup. Only the two accounts
+  exist; sign-up and account recovery are off.
+- Private items, their comments, history, and completions never reach the partner (enforced on
+  the server, tested).
+- Hardened 2026-11-02; details in [SPEC.md](SPEC.md) §8. Every prod deploy now waits for
+  Asher's approval in GitHub.
 
-**Hosting**
-- Runs on AWS, fully serverless.
-- Expected cost is about $0.25–0.50/month.
-- A $5/month budget alert is in place.
+**Hosting & cost**
+- Fully serverless on AWS. Actual cost is a few cents a month, plus the shared domain and DNS.
+- Budgets: `honeydo-monthly` at $1, and an account-wide `account-global-monthly` at $20.
 
-### Fixed since launch
+### Testing
 
-- **Blank page after setup:** the server was double-encoding chore schedules and the app
-  crashed reading them. Fixed on both ends, and the app now shows an error screen with Reload
-  instead of going blank.
-- **New address and icon:** moved from `aubi.` to `honeydo.ashershores.com` with the bee icon.
-  Passkeys had to be re-registered because they're tied to the domain.
+- 516 unit tests (shared rules, API with an in-memory table, web helpers).
+- 46 browser checks in `e2e/`. They run headless Chromium against the real API code with a
+  fake backend: M6, privacy and sync flows, Calendar layout, sort, and the Tasks tab. A
+  screenshot tour (phone, desktop, dark) is checked by eye.
+- Not covered by automation: real passkeys, real push notifications, iOS touch gestures.
 
-### Testing so far
+## Next steps
 
-- 32 automated tests cover the scheduling, color, and alert-timing rules, plus input checks.
-- Live end-to-end checks have passed against the real system:
-  - sign-in and session refresh
-  - private-item isolation, including live sync
-  - backdated completions
-  - undo
-  - conflicting edits
+Nothing is planned. Open items:
 
-## Proposed next steps
+| Item | Who |
+|---|---|
+| Sign out and in with Face ID once (checks the new passkey library on a real phone) | Asher |
+| Check a real 8pm Handoff push arrives | Asher |
+| Re-add the home-screen icon to show the "HoneyDo" name (then turn notifications back on) | Asher, optional |
+| The two $1 project budgets start tracking once the `app` cost tag (activated 2026-10-30) shows up in billing | Waits on AWS |
 
-Recommended order. Each step is roughly one working session.
-
-### 0. Cleanup (small)
-
-The code is on GitHub in a public repo, by choice, and `prod` auto-deploys.
-
-| Item | Why | Needs approval? |
-|---|---|---|
-| Delete test items and test Activity entries | Leftovers from launch testing | Done 2026-10-30 |
-| Delete the old `aubi` certificate DNS record | Harmless leftover from the domain move | Done 2026-10-30 |
-| Turn on cost tracking for the `app` tag | The budget alert can only track app costs once AWS recognizes the tag (~24h after deploy) | No |
-| "Remove passkey" button in Settings | The old `aubi` passkey still shows in the count | No |
-
-### 1. Notifications (M4): next priority
-
-The biggest piece of the original wishlist that's still missing.
-- **Overdue dings:** while a chore is red, 1×/day by default, or 1/2/3× for low/medium/high
-  severity. Quiet hours (default 9pm–7am) push dings to the morning. Assigned chores only ping
-  the assignee.
-- **Handoff** at each person's chosen time: what got done, what's overdue, what's coming
-  up.
-- **Setup:** one-tap "Enable notifications" (iOS requires the home-screen app and a tap).
-- **Actions:** tap a notification to open the chore, with a "Mark done" button.
-- **Offline launch:** the app also opens with no signal at all.
-- **Push keys:** the deploy creates the VAPID key pair in SSM on its first run and never
-  replaces it. No manual step or local AWS credentials needed.
-- Cost impact: about $0.
-
-### 2. Async comms, the rest (M2)
-
-- Comments on chores ("used the last of the shampoo").
-- Fridge: a shared whiteboard for notes not tied to a chore, with pins and expiry.
-- Handoff card inside the app.
-
-### 3. More views (M5)
-
-- **Today:** chores grouped by morning / afternoon / evening / night.
-- **Calendar:** upcoming due dates and past completions.
-- **Tag board:** e.g. columns for Nursery | Kitchen | Car.
-- **History & stats:** who did what, and target vs. actual interval ("bath: every 3d target,
-  3.4d actual").
-- Named saved views pinned as tabs, separate for each person.
-
-### 4. Polish (M6)
-
-- Quick-add shorthand: `bath every 3d #baby @aubyn`.
-- Swipe right = done, swipe left = snooze.
-- "Done at…" backdating straight from the list.
-- Custom yellow-warning window per chore.
-
-## Decisions needed
-
-1. Any rough edges from real use that should jump the queue ahead of notifications?
+Known small gaps:
+- After a Private item is shared, its last-done time and who did it are visible (not the note).
+- A refresh-token expiry doesn't release the device's push record. The Notifier prunes it once
+  the push service rejects it.
 
 ---
 
@@ -130,12 +78,16 @@ The biggest piece of the original wishlist that's still missing.
 | | |
 |---|---|
 | AWS account | 334772842524 (personal), region us-west-1, certificate in us-east-1 |
-| Stacks | `AubiHoneyCert` (us-east-1), `AubiHoney` (us-west-1) |
-| Frontend | React PWA on S3 + CloudFront, `honeydo.ashershores.com` |
-| API | AppSync GraphQL → one Node 22 Lambda resolver; subscriptions filtered by visibility |
+| Stacks | `AubiHoneyCert` (us-east-1), `AubiHoney` + `AubiHoneyCi` (us-west-1) |
+| Frontend | React 19 PWA on S3 + CloudFront, `honeydo.ashershores.com` |
+| API | AppSync GraphQL → one Node 22 Lambda resolver; subscriptions filtered by visibility and gated to Members |
 | Data | DynamoDB single table, on-demand, point-in-time backups, deletion protection |
-| Auth | Cognito Essentials, `USER_AUTH` flow, passkey RP ID `honeydo.ashershores.com` |
-| Users | `asher`, `aubyn`; one-time passwords in `.secrets/initial-passwords.txt` (delete once both passkeys work) |
-| Deploy | `npm run deploy` from repo root; see [README.md](README.md) |
+| Auth | Cognito Essentials, `USER_AUTH` flow, passkey RP ID `honeydo.ashershores.com`, refresh 7 days |
+| Users | `asher`, `aubyn` |
+| Deploy | PR → `main` → PR → `prod`; CI deploys after approval in the `production` Environment. See [README.md](README.md) |
+
+Internal names (`AubiHoney*` stacks, `/aubi-honey/` SSM paths, `@aubi/*` packages, `aubi.*`
+storage keys) keep the old name on purpose: renaming them would replace live resources or sign
+everyone out.
 
 </details>

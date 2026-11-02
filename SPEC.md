@@ -150,8 +150,10 @@ server-side in the resolvers, not only hidden in the UI.
 
 ## 5. Screens
 
-1. **On track / Overdue** (home): two tabs, as in the original note. Yellow items sit at the top
-   of On track. Swipe right = done, swipe left = snooze.
+1. **On track / Overdue / Tasks** (home): On track and Overdue as in the original note, plus a
+   Tasks tab with every open one-off Task (overdue too). Quick sort buttons: Due date (default),
+   Priority (Severity high → low, ties by due), A–Z; the choice is saved on the default view.
+   Swipe right = done, swipe left = Snooze / "Done at…".
 2. **Today timeline**: items grouped by Time-of-day tag, plus anything due today.
 3. **Calendar**: week/month showing upcoming due dates (projected for recurring) and past
    completions as dots.
@@ -220,13 +222,16 @@ filtered in resolvers.
 
 - Cognito user pool, Essentials tier (free at 2 MAU). Self-sign-up, account recovery and email
   are off.
-- Two users, `asher` and `aubyn`, created by `infra/scripts/create-users.ts`. Each has a 24-char
-  random password stored only in `.secrets/initial-passwords.txt` (chmod 600, gitignored).
+- Two users, `asher` and `aubyn`, created by `infra/scripts/create-users.ts` with a 24-char
+  random password each. The `.secrets/` copy was deleted once both passkeys worked; each of us
+  keeps our own password.
+- Password sign-in stays on permanently as the backup to passkeys (decided 2026-11-02).
 - Sign-in happens inside the PWA using Cognito's `USER_AUTH` flow. There's no hosted UI, which
   avoids iOS standalone-PWA OAuth redirect issues. The first sign-in uses the password, then
   setup asks for a passkey (`StartWebAuthnRegistration`), and after that it's Face ID.
 - The passkey relying party ID is `honeydo.ashershores.com`, with user verification required.
-- Tokens: id/access 1h, refresh 30d.
+- Tokens: id/access 1h, refresh 7d (was 30d until 2026-11-02). OAuth/hosted UI is disabled
+  on the client.
 - Why passwords instead of email OTP: SES is in sandbox mode, so Cognito can't email
   unverified addresses.
 
@@ -236,11 +241,12 @@ The repo is public on GitHub by choice. Secrets stay out of it (`.secrets/` is g
 
 ```
 honeydo/
-  infra/        CDK app (stacks: Auth, Data, Api, Web, Notifier)
+  infra/        CDK app (stacks: AubiHoneyCert, AubiHoney, AubiHoneyCi)
   schema/       schema.graphql
-  shared/       status/recurrence logic, types (used by web + lambda)
+  shared/       status/recurrence/views logic, types (used by web + Lambdas)
+  api/          API resolver + Notifier Lambdas
   web/          React PWA
-  notifier/     Lambda
+  e2e/          Playwright browser checks against an in-process fake backend
 ```
 
 ## 7. Cost estimate (2 users)
@@ -262,7 +268,11 @@ These are incremental costs: the hosted zone and domain already exist and are al
 | **Total** | **≈ $0.25–0.50/month** (heavy use 10× → still < $3) |
 
 Avoided on purpose: VPC/NAT gateway (~$32/mo), WAF ($5+), KMS customer keys ($1 each),
-Secrets Manager ($0.40/secret), and Cognito Plus tier. Set an AWS Budget alarm at $5.
+Secrets Manager ($0.40/secret), and Cognito Plus tier.
+
+Actual (October 2026): AppSync and DynamoDB about $0.002 each; everything else in free tiers.
+Budgets: `honeydo-monthly` $1 (tag `app=aubi-honey`, in AppStack) and the account-wide
+`account-global-monthly` $20 (all projects, made by hand outside any stack).
 
 ## 8. Security
 
@@ -282,16 +292,36 @@ Secrets Manager ($0.40/secret), and Cognito Plus tier. Set an AWS Budget alarm a
   subscription, so rotating means deleting both parameters by hand, redeploying, and turning
   notifications on again on both phones.
 
+Hardening (2026-11-02, from a full security review):
+- Every subscription checks the caller is a Member; the Lambda checks it for queries and
+  mutations.
+- Completions are stamped with their item's Visibility, so ones logged while Private never
+  reach the partner. Only an item's creator can move it from shared to Private. Known gap,
+  accepted: after an item goes from Private to shared, its `lastDoneAt`/`lastDoneBy` show
+  the last Private Completion's time and who did it (not the note).
+- Push endpoints must be a real push service (Apple, Google, Mozilla, Microsoft), max 10 devices
+  per Member. Caps: 2000 items, 300 Notes, 500 Comments per item. Tag colour/order, item times
+  and AWSJSON fields are validated.
+- AppSync error logs exclude request content. CSP adds `form-action`/`object-src`;
+  Permissions-Policy denies camera, microphone, geolocation, payment, USB.
+- CI: actions pinned to commit SHAs (required by repo setting). The deploy job runs in the
+  GitHub `production` Environment (prod branch only, needs Asher's approval), and the AWS
+  deploy role trusts only that Environment. `main` and `prod` are protected (PR + passing
+  tests, no force-push). Dependabot is on.
+- Sign-out closes shown notifications and clears device-wide flags.
+
 ## 9. Milestones
 
 1. ✅ **M1 Core** (deployed 2026-10-19; also includes M2 history/undo/activity feed and M3 offline outbox): CDK infra, auth, items CRUD, recurrence/status, On track/Overdue tabs, tags
    + filters, live sync.
-2. **M2 Comms**: completion history, comments, activity feed, Fridge.
-3. **M3 Offline + PWA**: IndexedDB, outbox, installable app (delta sync is optional, later).
-4. **M4 Notifications**: Web Push, overdue alerts, daily Handoff, quiet hours.
-5. **M5 Views**: Today timeline, calendar, Tag board, history/stats, saved views, themes,
-   private items.
-6. **M6 Seed & polish**: import your chore list, quick-add syntax, snooze/backdate/undo.
+2. ✅ **M2 Comms** (2026-10-30): comments, Fridge (pin, expiry, Make Task), in-app Handoff card,
+   Activity unread marker.
+3. ✅ **M3 Offline + PWA**: outbox, installable app, offline launch (delta sync is optional,
+   later).
+4. ✅ **M4 Notifications** (2026-10-29): Web Push, overdue Dings, daily Handoff, quiet hours.
+5. ✅ **M5 Views** (2026-10-30): Today, Calendar, Tag board, History & stats, Saved views.
+6. ✅ **M6 Polish** (2026-10-30): quick-add, swipe actions, "Done at…", Warn window override,
+   passkeys in Settings. Since then: quick sort, Tasks tab, security hardening (2026-11-02).
 
 ## 10. Out of scope (v1)
 
