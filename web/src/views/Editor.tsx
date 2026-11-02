@@ -127,7 +127,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
       <div className="sheet-body">
         <input className="title-input" placeholder="What needs doing?" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus={!item} maxLength={200} />
 
-        <label>Repeats
+        <div className="label" role="group" aria-label="Repeats">Repeats
           <div className="seg">
             {(["interval", "weekly", "monthly", "once"] as Mode[]).map((m) => (
               <button key={m} className={mode === m ? "on" : ""} onClick={() => setMode(m)}>
@@ -135,7 +135,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
               </button>
             ))}
           </div>
-        </label>
+        </div>
 
         {mode === "interval" && (
           <div className="row">
@@ -198,17 +198,17 @@ export function Editor({ item, prefill, onSaved, onClose }: {
         ))}
 
         {!isPrivate && (
-          <label>For
+          <div className="label" role="group" aria-label="For">For
             <div className="seg">
               <button className={!assignee ? "on" : ""} onClick={() => setAssignee("")}>Either</button>
               {Object.values(profiles).map((p) => (
                 <button key={p.userId} className={assignee === p.userId ? "on" : ""} onClick={() => setAssignee(p.userId)}>{nameOf(p.userId)}</button>
               ))}
             </div>
-          </label>
+          </div>
         )}
 
-        <label>Overdue alerts
+        <div className="label" role="group" aria-label="Overdue alerts">Overdue alerts
           <div className="seg">
             {(["", "low", "medium", "high"] as const).map((s) => (
               <button key={s} className={severity === s ? "on" : ""} onClick={() => setSeverity(s)}>
@@ -217,7 +217,7 @@ export function Editor({ item, prefill, onSaved, onClose }: {
             ))}
           </div>
           <small>Dings per day while overdue.</small>
-        </label>
+        </div>
 
         {/* Only the creator may make a shared item Private (the server enforces it too). */}
         {(!item || isPrivate || item.createdBy === me.userId) && (

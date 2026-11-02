@@ -51,7 +51,8 @@ await check("Done takes a Task off the Tasks tab", async () => {
 await check("+ on On track still opens a Chore (Every N)", async () => {
   await tab(p, "On track");
   await p.getByRole("button", { name: "Add" }).click();
-  const cls = await p.getByRole("dialog").last().locator(".seg button", { hasText: "Every N" }).getAttribute("class");
+  // Button groups are named groups, so each button keeps its own name for VoiceOver.
+  const cls = await p.getByRole("dialog").last().getByRole("group", { name: "Repeats" }).getByRole("button", { name: "Every N", exact: true }).getAttribute("class");
   await p.getByRole("dialog").last().getByRole("button", { name: "Cancel" }).click();
   if (!cls?.includes("on")) throw new Error(`Every N class=${cls}`);
 });

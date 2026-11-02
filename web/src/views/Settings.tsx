@@ -63,21 +63,21 @@ export function Settings({ onClose }: { onClose: () => void }) {
       </div>
       <div className="sheet-body">
         <label>Name<input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && patch({ displayName: name.trim() })} /></label>
-        <label>Color
+        <div className="label" role="group" aria-label="Color">Color
           <div className="swatches">
             {COLORS.map((c) => <button key={c} aria-label={c} className={c === me.color ? "on" : ""} style={{ background: c }} onClick={() => patch({ color: c })} />)}
           </div>
-        </label>
-        <label>Theme
+        </div>
+        <div className="label" role="group" aria-label="Theme">Theme
           <div className="seg">
             {["system", "light", "dark"].map((t) => <button key={t} className={(me.theme ?? "system") === t ? "on" : ""} onClick={() => patch({ theme: t })}>{t}</button>)}
           </div>
-        </label>
-        <label>Layout
+        </div>
+        <div className="label" role="group" aria-label="Layout">Layout
           <div className="seg">
             {["cards", "compact"].map((d) => <button key={d} className={(me.density ?? "cards") === d ? "on" : ""} onClick={() => patch({ density: d })}>{d}</button>)}
           </div>
-        </label>
+        </div>
 
         <h3>Alerts</h3>
         <NotificationsStep />
@@ -86,14 +86,14 @@ export function Settings({ onClose }: { onClose: () => void }) {
             onBlur={() => savePref("handoffAt", prefs.handoffAt)} />
           <small>Your once-a-day Handoff: what got done, what's overdue and what's due before the next one. It keeps coming even with overdue alerts off.</small>
         </label>
-        <label>Overdue alerts
+        <div className="label" role="group" aria-label="Overdue alerts">Overdue alerts
           <div className="seg">
             {[true, false].map((on) => (
               <button key={String(on)} className={prefs.overdueAlerts === on ? "on" : ""}
                 onClick={() => (setPrefs({ ...prefs, overdueAlerts: on }), savePref("overdueAlerts", on))}>{on ? "on" : "off"}</button>
             ))}
           </div>
-        </label>
+        </div>
         <label>Quiet hours
           <div className="row">
             <input type="time" aria-label="Quiet hours start" value={prefs.quietStart}

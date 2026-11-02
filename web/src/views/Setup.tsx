@@ -46,20 +46,20 @@ export function Setup() {
     <div className="page setup">
       <h1>Welcome 👋</h1>
       <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} /></label>
-      <label>Your color
+      <div className="label" role="group" aria-label="Your color">Your color
         <div className="swatches">
           {COLORS.map((c) => (
             <button key={c} aria-label={c} className={c === color ? "on" : ""} style={{ background: c }} onClick={() => setColor(c)} />
           ))}
         </div>
-      </label>
-      <label>Theme
+      </div>
+      <div className="label" role="group" aria-label="Theme">Theme
         <div className="seg">
           {["system", "light", "dark"].map((t) => (
             <button key={t} className={t === theme ? "on" : ""} onClick={() => setTheme(t)}>{t}</button>
           ))}
         </div>
-      </label>
+      </div>
       <label>Handoff time <span className="req">required</span>
         <input type="time" value={handoffAt} onChange={(e) => setHandoffAt(e.target.value)} />
         <small>Each day at this time you'll get a handoff: what got done, what's overdue, what's coming up.</small>
