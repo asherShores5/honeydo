@@ -18,7 +18,9 @@ const sortBtn = (name: string) => p.getByRole("group", { name: "Sort" }).getByRo
 await check("default is Due date: soonest first, undated last", async () => {
   if ((await sortBtn("Due date").getAttribute("aria-pressed")) !== "true") throw new Error("Due date not pressed");
   const t = await titles();
-  if (t.join("|") !== "Buy groceries|Water plants|Take out trash|Birthday gift") throw new Error(t.join(", "));
+  // Trash is weekly on Tuesdays, so its place depends on today; the rest is fixed.
+  const without = t.filter((x) => x !== "Take out trash");
+  if (without.join("|") !== "Buy groceries|Water plants|Birthday gift" || t.at(-1) !== "Birthday gift") throw new Error(t.join(", "));
   await shot(p, "sort-due");
   return t.join(", ");
 });
