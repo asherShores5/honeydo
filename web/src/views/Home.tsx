@@ -20,7 +20,7 @@ import { RowActions } from "./RowActions";
 import { BUILTIN_VIEWS, BoardView, CalendarView, SavedViewBody, SavedViewsManager, StatsView, TodayView, type BuiltinView } from "./Views";
 
 /** `view:<id>` is a pinned Saved view (m5/05). */
-type Tab = "ontrack" | "overdue" | "finished" | "activity" | "fridge" | "views" | `view:${string}`;
+type Tab = "ontrack" | "overdue" | "tasks" | "finished" | "activity" | "fridge" | "views" | `view:${string}`;
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(Date.now());
@@ -41,6 +41,8 @@ function matches(item: Item, selected: Set<string>, tags: Record<string, Tag>, w
   if (who === "unassigned") return !item.assigneeId;
   return true;
 }
+
+const EMPTY = { ontrack: "No chores yet. Tap + to add one.", overdue: "Nothing overdue 🎉", tasks: "No open Tasks. Tap + to add one." };
 
 /** The quick sort buttons on On track and Overdue. Due date is the default. */
 const SORTS: [ViewSort, string][] = [["urgency", "Due date"], ["priority", "Priority"], ["title", "A–Z"]];
@@ -135,8 +137,12 @@ export function Home() {
     return {
       overdue: list.filter((i) => status(i, now) === "red"),
       ontrack: list.filter((i) => status(i, now) !== "red"),
+      // Every open one-off Task, overdue or not.
+      tasks: list.filter((i) => i.kind === "task"),
     };
   }, [items, selected, tags, who, sort, me.userId, now]);
+
+  const listTab = tab === "overdue" ? "overdue" : tab === "tasks" ? "tasks" : "ontrack";
 
   // Done Archives a Task; this tab is how you get back to it and its History.
   const finished = useMemo(() => finishedTasks(Object.values(items)), [items]);
@@ -173,6 +179,7 @@ export function Home() {
       <nav className="tabs">
         <button className={tab === "ontrack" ? "on" : ""} onClick={() => setTab("ontrack")}>On track <b>{visible.ontrack.length}</b></button>
         <button className={tab === "overdue" ? "on red" : "red"} onClick={() => setTab("overdue")}>Overdue <b>{visible.overdue.length}</b></button>
+        <button className={tab === "tasks" ? "on" : ""} onClick={() => setTab("tasks")}>Tasks <b>{visible.tasks.length}</b></button>
         <button className={tab === "finished" ? "on" : ""} onClick={() => setTab("finished")}>Finished</button>
         <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
           Activity{unread > 0 && <b className="unread" aria-label={`${unread} unread`}>{unread > 99 ? "99+" : unread}</b>}
@@ -184,7 +191,7 @@ export function Home() {
         ))}
       </nav>
 
-      {(tab === "ontrack" || tab === "overdue") && (
+      {(tab === "ontrack" || tab === "overdue" || tab === "tasks") && (
         <div className="filters">
           <button className={`chip ${filterCount ? "on" : ""}`} onClick={() => setShowFilters(!showFilters)}>
             Filter{filterCount ? ` · ${filterCount}` : ""} {showFilters ? "▴" : "▾"}
@@ -220,7 +227,7 @@ export function Home() {
         </div>
       )}
 
-      {tab === "ontrack" && <QuickAdd />}
+      {(tab === "ontrack" || tab === "tasks") && <QuickAdd />}
 
       <main>
         {activeView ? (
@@ -267,10 +274,10 @@ export function Home() {
           </ul>
         ) : (
           <ul className="items">
-            {visible[tab === "overdue" ? "overdue" : "ontrack"].length === 0 && (
-              <li className="empty">{tab === "overdue" ? "Nothing overdue 🎉" : filterCount ? "No matches for this filter." : "No chores yet. Tap + to add one."}</li>
+            {visible[listTab].length === 0 && (
+              <li className="empty">{filterCount ? "No matches for this filter." : EMPTY[listTab]}</li>
             )}
-            {visible[tab === "overdue" ? "overdue" : "ontrack"].map((i) => (
+            {visible[listTab].map((i) => (
               <ItemRow key={i.id} item={i} now={now} tags={tags} onOpen={() => setEditing(i)} onDone={() => done(i)} onActions={() => setRowActions(i)} />
             ))}
           </ul>
@@ -296,7 +303,8 @@ export function Home() {
         />
       )}
       {rowActions && <RowActions item={rowActions} onDone={(at) => done(rowActions, at)} onClose={() => setRowActions(null)} />}
-      {editing && <Editor item={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
+      {/* + on the Tasks tab starts a one-off Task. */}
+      {editing && <Editor item={editing === "new" ? undefined : editing} prefill={editing === "new" && tab === "tasks" ? { title: "" } : undefined} onClose={() => setEditing(null)} />}
       {fromNote && (
         <Editor
           prefill={taskDraft(fromNote)}

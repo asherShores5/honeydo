@@ -42,6 +42,8 @@ export async function reveal(p: Page, title: string) {
 }
 
 export async function swipe(p: Page, title: string, dx: number) {
+  // The Undo toast sits over the lower rows for 6s; a swipe that lands on it does nothing.
+  await p.locator(".toast").waitFor({ state: "detached", timeout: 8000 }).catch(() => {});
   await reveal(p, title);
   await row(p, title).scrollIntoViewIfNeeded();
   const box = (await row(p, title).boundingBox())!;
