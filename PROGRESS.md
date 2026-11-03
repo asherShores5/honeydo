@@ -1,11 +1,11 @@
 # HoneyDo: Progress & Next Steps
 
-_Updated 2026-11-02_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
+_Updated 2026-11-03_ · Live at **https://honeydo.ashershores.com** · Full design: [SPEC.md](SPEC.md)
 
 ## Where things stand
 
 All six planned milestones are live and in use on both phones. Since then: quick sort buttons,
-a Tasks tab, and a security hardening pass.
+a Tasks tab, a security hardening pass, and a guest demo.
 
 ### Working today
 
@@ -42,14 +42,22 @@ a Tasks tab, and a security hardening pass.
 - Hardened 2026-11-02; details in [SPEC.md](SPEC.md) §8. Every prod deploy now waits for
   Asher's approval in GitHub.
 
+**Guest demo** (`/demo`)
+- A made-up household (Sam and Alex) with seeded Chores, Tasks, a Private item, Fridge Notes,
+  a Comment and Activity. Visitors land signed in as Sam and can switch to Alex or Reset.
+- Runs entirely in the browser tab: the real API handler on the in-memory table, with every
+  network call answered locally and anything off-origin refused. No push, passkeys or AWS calls.
+- Demo storage is prefixed (`demo:`), so a Member who opens it keeps their own sign-in and cache.
+  State lasts for the tab (sessionStorage); Exit removes every demo key.
+
 **Hosting & cost**
 - Fully serverless on AWS. Actual cost is a few cents a month, plus the shared domain and DNS.
 - Budgets: `honeydo-monthly` at $1, and an account-wide `account-global-monthly` at $20.
 
 ### Testing
 
-- 516 unit tests (shared rules, API with an in-memory table, web helpers).
-- 46 browser checks in `e2e/`. They run headless Chromium against the real API code with a
+- 527 unit tests (shared rules, API with an in-memory table, web helpers, guest demo).
+- 54 browser checks in `e2e/` (8 of them for the guest demo, with no fake backend at all). They run headless Chromium against the real API code with a
   fake backend: M6, privacy and sync flows, Calendar layout, sort, and the Tasks tab. A
   screenshot tour (phone, desktop, dark) is checked by eye.
 - Not covered by automation: real passkeys, real push notifications, iOS touch gestures.

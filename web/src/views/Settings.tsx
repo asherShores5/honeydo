@@ -9,6 +9,8 @@ import { groupTags, tagId } from "../tags";
 import { releaseThisDevice } from "../notifications";
 import { NotificationsStep } from "./Notifications";
 import { COLORS } from "./Setup";
+import { DEMO } from "../demo/boot";
+import { exitDemo } from "../demo/shims";
 
 const SEVERITIES: [Severity, string][] = [["low", "Low"], ["medium", "Medium"], ["high", "High"]];
 
@@ -21,7 +23,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [newTag, setNewTag] = useState({ name: "", group: "Category" });
 
   const loadPasskeys = () => listPasskeys().then((p) => setPasskeys(passkeyRows(p, getConfig().passkeyDomain ?? location.hostname)), () => {});
-  useEffect(() => void loadPasskeys(), []);
+  useEffect(() => void (DEMO || loadPasskeys()), []);
 
   async function removePasskey(p: PasskeyRow) {
     if (!p.removable || !confirm(`Remove "${p.name}" from ${when(p.createdAt)}? It won't sign in anymore.`)) return;
@@ -80,7 +82,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
         </div>
 
         <h3>Alerts</h3>
-        <NotificationsStep />
+        {DEMO ? <p className="hint">Notifications are off in the demo.</p> : <NotificationsStep />}
         <label>Handoff time
           <input type="time" value={prefs.handoffAt} onChange={(e) => setPrefs({ ...prefs, handoffAt: e.target.value })}
             onBlur={() => savePref("handoffAt", prefs.handoffAt)} />
@@ -136,25 +138,31 @@ export function Settings({ onClose }: { onClose: () => void }) {
           <button className="primary">Add</button>
         </form>
 
-        <h3>Sign-in</h3>
-        {passkeys === undefined ? <p>…</p> : (
-          <ul className="passkeys">
-            {passkeys.length === 0 && <li className="empty">No passkeys yet.</li>}
-            {passkeys.map((p) => (
-              <li key={p.id}>
-                <span>{p.name}<small> · added {when(p.createdAt)}{p.oldDomain ? " · old domain, can't sign in here" : ""}</small></span>
-                {p.removable
-                  ? <button className="link danger" onClick={() => void removePasskey(p)}>Remove</button>
-                  : <small title="Keep at least one passkey that works here">Last one</small>}
-              </li>
-            ))}
-          </ul>
+        {DEMO ? (
+          <button className="danger" onClick={exitDemo}>Exit demo</button>
+        ) : (
+          <>
+            <h3>Sign-in</h3>
+            {passkeys === undefined ? <p>…</p> : (
+              <ul className="passkeys">
+                {passkeys.length === 0 && <li className="empty">No passkeys yet.</li>}
+                {passkeys.map((p) => (
+                  <li key={p.id}>
+                    <span>{p.name}<small> · added {when(p.createdAt)}{p.oldDomain ? " · old domain, can't sign in here" : ""}</small></span>
+                    {p.removable
+                      ? <button className="link danger" onClick={() => void removePasskey(p)}>Remove</button>
+                      : <small title="Keep at least one passkey that works here">Last one</small>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button onClick={() => registerPasskey().then(() => (toast("Passkey added"), void loadPasskeys()), (e) => toast(e.message))}>
+              Add a passkey for this device
+            </button>
+            {/* Push cleanup first, while the tokens still work (story 25). */}
+            <button className="danger" onClick={() => void releaseThisDevice().finally(signOut)}>Sign out</button>
+          </>
         )}
-        <button onClick={() => registerPasskey().then(() => (toast("Passkey added"), void loadPasskeys()), (e) => toast(e.message))}>
-          Add a passkey for this device
-        </button>
-        {/* Push cleanup first, while the tokens still work (story 25). */}
-        <button className="danger" onClick={() => void releaseThisDevice().finally(signOut)}>Sign out</button>
       </div>
     </div>
   );

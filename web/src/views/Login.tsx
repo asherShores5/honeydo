@@ -50,6 +50,7 @@ export function Login() {
         </form>
       )}
       {error && <p className="error">{error}</p>}
+      <a className="link demo-link" href="/demo">Just looking? Try the demo household</a>
     </div>
   );
 }
