@@ -155,3 +155,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .passkeys { list-style: none; padding: 0; margin: 0 0 8px; }
 .passkeys li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .passkeys small { color: var(--muted); }
+
+/* Guest demo (src/demo): the strip above the header, and the link under sign-in. */
+.demo-banner { padding: calc(env(safe-area-inset-top) + 8px) 16px 4px; background: color-mix(in srgb, var(--me) 14%, var(--bg)); font-size: 14px; }
+.demo-banner p { margin: 0; }
+.demo-banner .row { margin: 4px 0; }
+.demo-banner button { font-size: 13px; padding: 6px 10px; }
+.demo-link { margin-top: 16px; text-decoration: none; }

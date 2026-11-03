@@ -1,3 +1,4 @@
+import "./demo/boot"; // first: may swap storage and network for the guest demo
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";

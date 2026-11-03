@@ -5,7 +5,8 @@ they're done, stay green until they're coming due, turn yellow, then red when ov
 sync live between both phones.
 
 Live at **https://honeydo.ashershores.com** (private; two accounts only). The code repo is
-public by choice.
+public by choice. **Try it without an account: https://honeydo.ashershores.com/demo**, a
+made-up household that runs entirely in your browser tab.
 
 - **Repeating chores:** every N hours/days/weeks after they're done, or on fixed weekdays or
   dates.
@@ -34,7 +35,7 @@ Lambda resolver (api/) ── DynamoDB (single table)
 | `shared/` | Pure TS scheduling/status/alert logic, used by web and backend |
 | `api/` | AppSync Lambda resolver (validation, merge, visibility rules) |
 | `schema/` | GraphQL schema |
-| `web/` | React + Vite PWA |
+| `web/` | React + Vite PWA. `web/src/demo/` is the guest demo: the real `api/` handler on an in-memory table, in the browser |
 | `infra/` | AWS CDK: `AubiHoneyCert` (us-east-1), `AubiHoney` + `AubiHoneyCi` (us-west-1) |
 
 ## Development

@@ -11,6 +11,7 @@ export function QuickAdd() {
   const profiles = useStore((s) => s.profiles);
   const [line, setLine] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
+  const partner = Object.values(profiles).find((p) => p.userId !== me.userId);
 
   function add() {
     if (!line.trim()) return;
@@ -29,7 +30,7 @@ export function QuickAdd() {
       <input
         value={line}
         onChange={(e) => (setLine(e.target.value), errors.length && setErrors([]))}
-        placeholder="Quick add: bath every 3d #baby @aubyn"
+        placeholder={`Quick add: bath every 3d #baby @${partner?.username ?? "partner"}`}
         aria-label="Quick add"
         enterKeyHint="done"
       />
