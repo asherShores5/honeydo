@@ -9,6 +9,7 @@ Status and roadmap live in [PROGRESS.md](PROGRESS.md) and [SPEC.md](SPEC.md) §9
 - [ ] Confirm `honeydo-monthly` shows HoneyDo spend once the `app` tag reaches billing
 
 ## Done recently
+- [x] Guest demo at /demo (2026-11-03); then update the portfolio card text
 - [x] Activate the `app` cost-allocation tag (2026-10-30)
 - [x] Settings: list and remove passkeys (M6)
 - [x] `.secrets/initial-passwords.txt` deleted; password sign-in kept as backup

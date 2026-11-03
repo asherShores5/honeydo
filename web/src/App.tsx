@@ -6,6 +6,8 @@ import { start, stop, useStore } from "./store";
 import { Login } from "./views/Login";
 import { Setup } from "./views/Setup";
 import { Home } from "./views/Home";
+import { DemoBanner } from "./views/DemoBanner";
+import { DEMO } from "./demo/boot";
 
 export function App() {
   const [configError, setConfigError] = useState<string>();
@@ -39,5 +41,5 @@ export function App() {
   if (startError) return <div className="center">Couldn't reach the server: {startError}</div>;
   if (!ready || !me) return <div className="center">Syncing…</div>;
   if (!me.setupComplete) return <Setup />;
-  return <Home />;
+  return DEMO ? <><DemoBanner /><Home /></> : <Home />;
 }
