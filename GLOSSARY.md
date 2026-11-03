@@ -106,6 +106,7 @@ _Avoid_: Account, preferences
 
 **Demo household**:
 The guest demo at /demo: two made-up people (Sam and Alex) whose data lives only in one browser tab and never reaches the real Household.
+Called the guest demo in code and docs.
 _Avoid_: Sandbox, test account
 
 ### Alerts

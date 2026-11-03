@@ -1,7 +1,8 @@
 // The guest demo's backend, entirely in the browser: the real API handler (api/src/handler.ts)
 // on the in-memory table, behind a GraphQL executor built from schema/schema.graphql, plus the
 // few Cognito calls web/src/auth.ts makes. Same idea as e2e/backend.ts, minus Node.
-// Loaded lazily (shims.ts imports it on the first call), so the real app never downloads it.
+// Loaded lazily (shims.ts imports it on the first call), so the real app never runs it (the
+// service worker still precaches the chunk, like every build file).
 import {
   GraphQLScalarType, Kind, buildSchema, defaultFieldResolver, execute, parse, valueFromASTUntyped,
   type DocumentNode, type GraphQLFieldResolver, type ValueNode,
@@ -10,12 +11,9 @@ import sdl from "../../../schema/schema.graphql?raw";
 import { handler, setDocClient } from "../../../api/src/handler";
 import { FakeDocClient } from "../../../api/src/testing/fakeDynamo";
 import { appSyncEvent } from "../../../api/src/testing/event";
-import { DEMO_MEMBERS, memberForToken, type DemoMember } from "./members";
+import { DEMO_MEMBERS, demoTokens, memberForRefresh, memberForToken, type DemoMember } from "./members";
 import { DB_KEY } from "./mode";
 
-export { tokenFor } from "./members";
-
-export { DB_KEY } from "./mode";
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -58,6 +56,9 @@ interface Subscriber {
   send: (data: unknown) => void;
 }
 
+/** After this long the seeded dates read wrong ("due tomorrow" for days), so a reload reseeds. */
+const STALE_MS = 12 * 3_600_000;
+
 export interface DemoBackend {
   /** One GraphQL request, as AppSync would answer it for the Member holding `token`. */
   graphql(token: string | undefined, query: string, variables?: Record<string, unknown>): Promise<{ data?: any; errors?: { message: string }[] }>;
@@ -72,12 +73,17 @@ export async function createDemoBackend(opts: { store: Store; now?: number }): P
   const db = new FakeDocClient();
   setDocClient(db);
   const subscribers = new Set<Subscriber>();
-  const save = () => store.setItem(DB_KEY, JSON.stringify(db.dump()));
+  const now = opts.now ?? Date.now();
+  let seededAt = now;
+  const save = () => store.setItem(DB_KEY, JSON.stringify({ seededAt, records: db.dump() }));
 
-  const saved = store.getItem(DB_KEY);
-  if (saved) db.seed(...(JSON.parse(saved) as Record<string, unknown>[]));
-  else {
-    await seed(opts.now ?? Date.now());
+  const saved = JSON.parse(store.getItem(DB_KEY) ?? "null") as { seededAt: number; records: Record<string, unknown>[] } | null;
+  // Seed dates are relative to when it was seeded, so a tab left open for days starts over.
+  if (saved && now - saved.seededAt < STALE_MS) {
+    seededAt = saved.seededAt;
+    db.seed(...saved.records);
+  } else {
+    await seed(now);
     save();
   }
 
@@ -118,12 +124,10 @@ export async function createDemoBackend(opts: { store: Store; now?: number }): P
     },
 
     cognito(target, body) {
-      const tokens = (username: string) => ({
-        AuthenticationResult: { IdToken: `demo-id.${username}`, AccessToken: `demo-access.${username}`, ExpiresIn: 24 * 3600, TokenType: "Bearer" },
-      });
-      if (target === "InitiateAuth" && body?.AuthFlow === "REFRESH_TOKEN_AUTH") {
-        const u = String(body.AuthParameters?.REFRESH_TOKEN ?? "").replace(/^demo-refresh\./, "");
-        if (DEMO_MEMBERS[u]) return { status: 200, json: tokens(u) };
+      const m = target === "InitiateAuth" && body?.AuthFlow === "REFRESH_TOKEN_AUTH" ? memberForRefresh(body.AuthParameters?.REFRESH_TOKEN) : undefined;
+      if (m) {
+        const t = demoTokens(m.username);
+        return { status: 200, json: { AuthenticationResult: { IdToken: t.idToken, AccessToken: t.accessToken, ExpiresIn: 24 * 3600, TokenType: "Bearer" } } };
       }
       if (target === "ListWebAuthnCredentials") return { status: 200, json: { Credentials: [] } };
       if (target === "RevokeToken") return { status: 200, json: {} };
@@ -137,13 +141,13 @@ export async function createDemoBackend(opts: { store: Store; now?: number }): P
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
 
-async function as(username: string, field: string, args: Record<string, unknown>) {
+async function callAs(username: string, field: string, args: Record<string, unknown>) {
   return handler(appSyncEvent(DEMO_MEMBERS[username], field, args));
 }
 
 async function seed(now: number) {
   for (const m of Object.values(DEMO_MEMBERS)) {
-    await as(m.username, "putProfile", {
+    await callAs(m.username, "putProfile", {
       input: { displayName: m.displayName, color: m.color, theme: "system", setupComplete: true, alertPrefs: JSON.stringify({ handoffAt: "20:00" }) },
     });
   }
@@ -151,7 +155,7 @@ async function seed(now: number) {
     ["loc-kitchen", "Kitchen", "Locale"], ["loc-bath", "Bathroom", "Locale"], ["loc-yard", "Yard", "Locale"],
     ["cat-clean", "Cleaning", "Category"], ["cat-errands", "Errands", "Category"], ["cat-pets", "Pets", "Category"],
   ];
-  for (const [id, name, group] of tags) await as("sam", "putTag", { input: { id, name, group } });
+  for (const [id, name, group] of tags) await callAs("sam", "putTag", { input: { id, name, group } });
 
   const sam = DEMO_MEMBERS.sam.userId;
   const alex = DEMO_MEMBERS.alex.userId;
@@ -177,7 +181,7 @@ async function seed(now: number) {
     // Private: Alex never sees this one.
     task("gift", "Birthday present for Alex", [], { visibility: `private:${sam}`, dueAt: now + 10 * DAY }),
   ];
-  for (const input of items) await as("sam", "putItem", { input });
+  for (const input of items) await callAs("sam", "putItem", { input });
 
   const done: [string, string, number][] = [
     ["alex", "dishes", now - DAY - HOUR], // due again
@@ -189,9 +193,9 @@ async function seed(now: number) {
     ["alex", "sheets", now - 15 * DAY], // overdue
     ["alex", "library", now - 20 * HOUR], // a finished Task
   ];
-  for (const [u, itemId, at] of done) await as(u, "completeItem", { itemId, at });
+  for (const [u, itemId, at] of done) await callAs(u, "completeItem", { itemId, at });
 
-  await as("alex", "postNote", { id: "note-milk", text: "We're out of oat milk", pinned: true });
-  await as("sam", "postNote", { id: "note-plumber", text: "Plumber can come Thursday 9–11 if the faucet fix doesn't work" });
-  await as("alex", "addComment", { itemId: "faucet", id: "c-washer", text: "I think it needs a new washer. Hardware store has them." });
+  await callAs("alex", "postNote", { id: "note-milk", text: "We're out of oat milk", pinned: true });
+  await callAs("sam", "postNote", { id: "note-plumber", text: "Plumber can come Thursday 9–11 if the faucet fix doesn't work" });
+  await callAs("alex", "addComment", { itemId: "faucet", id: "c-washer", text: "I think it needs a new washer. Hardware store has them." });
 }

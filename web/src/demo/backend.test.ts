@@ -13,7 +13,9 @@ const { MemStorage } = vi.hoisted(() => {
 });
 
 import { Q } from "../api";
-import { DB_KEY, createDemoBackend, tokenFor } from "./backend";
+import { createDemoBackend } from "./backend";
+import { tokenFor } from "./members";
+import { DB_KEY } from "./mode";
 
 const NOW = Date.UTC(2026, 10, 3, 20); // Tue Nov 3 2026, noon Pacific
 const SAM = tokenFor("sam");
@@ -67,8 +69,20 @@ describe("demo backend", () => {
     const b = await createDemoBackend({ store: new MemStorage(), now: NOW });
     expect((await b.graphql(undefined, Q.me)).errors?.[0].message).toBe("Unauthorized");
     expect((await b.graphql("eyJraWQiOi.real.jwt", Q.me)).errors?.[0].message).toBe("Unauthorized");
+    expect((await b.graphql("demo-id.__proto__", Q.me)).errors?.[0].message).toBe("Unauthorized");
+    expect((await b.graphql("demo-id.constructor", Q.me)).errors?.[0].message).toBe("Unauthorized");
     expect(b.subscribe("eyJraWQiOi.real.jwt", Q.onItemChange, () => {})).toBeUndefined();
     expect(b.cognito("StartWebAuthnRegistration", {}).status).toBe(400);
     expect(b.cognito("InitiateAuth", { AuthFlow: "REFRESH_TOKEN_AUTH", AuthParameters: { REFRESH_TOKEN: "demo-refresh.alex" } }).status).toBe(200);
+  });
+
+  it("starts over once the seed is half a day old, so its dates stay believable", async () => {
+    const store = new MemStorage();
+    const first = await createDemoBackend({ store, now: NOW });
+    await first.graphql(SAM, Q.putItem, { input: { id: "new-1", kind: "task", title: "Call the landlord", tags: [], visibility: "shared", archived: false } });
+    const titles = async (now: number) =>
+      (await (await createDemoBackend({ store, now })).graphql(SAM, Q.snapshot)).data.snapshot.items.map((i: any) => i.title);
+    expect(await titles(NOW + 11 * 3_600_000)).toContain("Call the landlord");
+    expect(await titles(NOW + 13 * 3_600_000)).not.toContain("Call the landlord");
   });
 });

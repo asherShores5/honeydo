@@ -1,9 +1,10 @@
 // Turns this tab into the guest demo: demo-only storage, a signed-in demo Member, and every
 // network call the app makes (config, Cognito, AppSync, realtime) answered in the browser by
-// backend.ts. Anything else that leaves this origin is refused, so the demo can never reach AWS.
+// backend.ts. Any other fetch or WebSocket off this origin is refused, so the app's own calls can
+// never reach AWS (static <img>/CSS loads aren't shimmed; the app makes none off-origin).
 import type { Config } from "../config";
 import type { DemoBackend } from "./backend";
-import { DEMO_MEMBERS, tokenFor } from "./members";
+import { DEMO_MEMBERS, demoTokens } from "./members";
 import { DB_KEY, DEMO_FLAG, clearDemoKeys, isolateStorage } from "./mode";
 
 const GRAPHQL_URL = "https://demo.appsync-api.invalid/graphql";
@@ -18,6 +19,8 @@ const CONFIG: Config = {
   // No vapidPublicKey: Enable notifications shows as unsupported, so nothing subscribes to push.
 };
 
+// Copies of auth.ts KEY and store.ts CACHE/OUTBOX. Importing those modules here would run them
+// before isolateStorage (they read localStorage on load) and leak the real Member's data in.
 const TOKENS = "aubi.tokens";
 const CACHE_KEYS = ["aubi.cache.v1", "aubi.outbox.v1"];
 const TEN_YEARS = 10 * 365 * 86_400_000;
@@ -28,10 +31,7 @@ const getBackend = () =>
 
 /** Sign this tab in as a demo Member (written with the storage patch on). */
 function signInAs(username: string) {
-  localStorage.setItem(TOKENS, JSON.stringify({
-    idToken: tokenFor(username), accessToken: `demo-access.${username}`, refreshToken: `demo-refresh.${username}`,
-    expiresAt: Date.now() + TEN_YEARS, username,
-  }));
+  localStorage.setItem(TOKENS, JSON.stringify({ ...demoTokens(username), expiresAt: Date.now() + TEN_YEARS, username }));
   localStorage.setItem("aubi.lastUser", username);
 }
 
@@ -119,7 +119,10 @@ export function resetDemo() {
   location.reload();
 }
 
-/** Become the other person in the household, keeping everything done so far. */
+/**
+ * Become the other person in the household, keeping everything done so far. Dropping the outbox
+ * loses nothing: the in-browser backend answers at once, so nothing waits in it.
+ */
 export function switchTo(username: string) {
   for (const k of CACHE_KEYS) localStorage.removeItem(k);
   signInAs(username);

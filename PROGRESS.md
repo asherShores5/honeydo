@@ -56,7 +56,7 @@ a Tasks tab, a security hardening pass, and a guest demo.
 
 ### Testing
 
-- 526 unit tests (shared rules, API with an in-memory table, web helpers, guest demo).
+- 527 unit tests (shared rules, API with an in-memory table, web helpers, guest demo).
 - 54 browser checks in `e2e/` (8 of them for the guest demo, with no fake backend at all). They run headless Chromium against the real API code with a
   fake backend: M6, privacy and sync flows, Calendar layout, sort, and the Tasks tab. A
   screenshot tour (phone, desktop, dark) is checked by eye.
