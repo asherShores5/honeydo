@@ -55,11 +55,11 @@ describe("demo backend", () => {
     const store = new MemStorage();
     const first = await createDemoBackend({ store, now: NOW });
     await first.graphql(SAM, Q.putItem, { input: { id: "new-1", kind: "task", title: "Call the landlord", tags: [], visibility: "shared", archived: false } });
-    const again = await createDemoBackend({ store });
+    const again = await createDemoBackend({ store, now: NOW + 3_600_000 });
     const titles = async () => (await again.graphql(ALEX, Q.snapshot)).data.snapshot.items.map((i: any) => i.title);
     expect(await titles()).toContain("Call the landlord");
     store.removeItem(DB_KEY); // what Reset does before reloading
-    const fresh = await createDemoBackend({ store });
+    const fresh = await createDemoBackend({ store, now: NOW + 3_600_000 });
     const freshTitles = (await fresh.graphql(ALEX, Q.snapshot)).data.snapshot.items.map((i: any) => i.title);
     expect(freshTitles).not.toContain("Call the landlord");
     expect(freshTitles).toContain("Dishes");
