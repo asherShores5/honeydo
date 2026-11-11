@@ -12,7 +12,7 @@
   "dependencies": {
     "@aubi/shared": "*",
     "@simplewebauthn/browser": "^14.0.0",
-    "graphql": "^16.14.2",
+    "graphql": "^17.1.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
